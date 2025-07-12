@@ -1,70 +1,98 @@
-
 import os
 import logging
 import requests
-import subprocess
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, executor, types
 
-API_TOKEN = os.getenv("API_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-
+API_TOKEN = os.getenv("API_TOKEN")  # أضفه في متغيرات Render
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 logging.basicConfig(level=logging.INFO)
 
-def extract_video_link(movie_name):
-    search_url = f"https://wecima.org/?s={movie_name.replace(' ', '+')}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(search_url, headers=headers)
-    soup = BeautifulSoup(res.text, "html.parser")
-    first_result = soup.select_one("h2.entry-title a")
-    if not first_result:
-        return None
-    movie_page = requests.get(first_result["href"], headers=headers)
-    soup = BeautifulSoup(movie_page.text, "html.parser")
-    iframe = soup.find("iframe")
-    return iframe["src"] if iframe else None
+headers = {"User-Agent": "Mozilla/5.0"}
 
+# ========= الموقع 1: Wecima =========
+def search_wecima(movie_name):
+    url = f"https://wecima.show/?s={movie_name.replace(' ', '+')}"
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "html.parser")
+    link = soup.select_one("h2.entry-title a")
+    if not link: return None
+
+    page = requests.get(link["href"], headers=headers)
+    soup = BeautifulSoup(page.text, "html.parser")
+    iframe = soup.find("iframe")
+    if iframe: return iframe.get("src")
+    return None
+
+# ========= الموقع 2: EgyBest =========
+def search_egybest(movie_name):
+    url = f"https://egybest.ltd/search/?q={movie_name.replace(' ', '+')}"
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "html.parser")
+    link = soup.select_one("a.movie a")
+    if not link: return None
+
+    page = requests.get(link["href"], headers=headers)
+    soup = BeautifulSoup(page.text, "html.parser")
+    iframe = soup.find("iframe")
+    if iframe: return iframe.get("src")
+    return None
+
+# ========= الموقع 3: Cima4u =========
+def search_cima4u(movie_name):
+    url = f"https://my.cima4u.ws/search/{movie_name.replace(' ', '%20')}"
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "html.parser")
+    link = soup.select_one("h3.title a")
+    if not link: return None
+
+    page = requests.get(link["href"], headers=headers)
+    soup = BeautifulSoup(page.text, "html.parser")
+    iframe = soup.find("iframe")
+    if iframe: return iframe.get("src")
+    return None
+
+# ========= دمج البحث في كل المواقع =========
+def find_movie_link(title):
+    for site in [search_wecima, search_egybest, search_cima4u]:
+        try:
+            link = site(title)
+            if link:
+                return link
+        except Exception as e:
+            print(f"Error in {site.__name__}: {e}")
+    return None
+
+# ========= المعالجة على تيليغرام =========
 @dp.message_handler()
-async def handle_movie(message: types.Message):
-    movie = message.text.strip()
-    await message.reply("🔍 جاري البحث عن الفيلم...")
+async def handle(message: types.Message):
+    title = message.text.strip()
+    await message.reply("🔍 جاري البحث عن الفيلم في عدة مواقع...")
+
     try:
-        video_url = extract_video_link(movie)
+        video_url = find_movie_link(title)
         if not video_url:
             return await message.reply("❌ لم أجد رابط للمشاهدة.")
 
-        await message.reply("⬇️ جاري التحميل من المصدر...")
-
-        filename = "movie.mp4"
-        subprocess.run(["yt-dlp", "-o", filename, video_url], check=True)
-
-        if os.path.exists(filename):
-            with open(filename, "rb") as vid:
-                await bot.send_video(message.chat.id, vid, caption=f"🎬 {movie}")
+        # إذا كان رابط مباشر للفيديو mp4 نحاول تحميله
+        if video_url.endswith(".mp4"):
+            video_data = requests.get(video_url, stream=True)
+            filename = "video.mp4"
+            with open(filename, "wb") as f:
+                for chunk in video_data.iter_content(chunk_size=1024*1024):
+                    if chunk:
+                        f.write(chunk)
+            with open(filename, "rb") as video:
+                await bot.send_video(message.chat.id, video, caption=f"🎬 {title}")
             os.remove(filename)
         else:
-            await message.reply("⚠️ لم أتمكن من تحميل الفيديو.")
+            await message.reply(f"🎬 {title}\n🔗 رابط المشاهدة:\n{video_url}")
+
     except Exception as e:
-        await message.reply("❌ حدث خطأ أثناء المعالجة.")
+        await message.reply("❌ حدث خطأ أثناء البحث أو التنزيل.")
         print("ERROR:", e)
 
-async def on_startup(dp):
-    await bot.set_webhook(WEBHOOK_URL)
-
-async def on_shutdown(dp):
-    await bot.delete_webhook()
-
+# ========= تشغيل البوت =========
 if __name__ == "__main__":
-    executor.start_webhook(
-        dispatcher=dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        skip_updates=True,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8080))
-    )
+    executor.start_polling(dp, skip_updates=True)
