@@ -4,30 +4,30 @@ import requests
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, types
 from aiohttp import web
+import asyncio
 
-# إعداد البوت و webhook
 API_TOKEN = os.getenv("API_TOKEN")
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # مثال: https://your-app-name.onrender.com
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 PORT = int(os.environ.get("PORT", 8080))
+CHANNEL_USERNAME = "p2p_LRN"
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 logging.basicConfig(level=logging.INFO)
 
-CHANNEL_USERNAME = "p2p_LRN"
 headers = {"User-Agent": "Mozilla/5.0"}
 
-# التحقق من الاشتراك
+# التحقق من الاشتراك في القناة
 async def is_user_subscribed(user_id):
     try:
         member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except:
+    except Exception:
         return False
 
-# دوال البحث في المواقع
+# مواقع البحث
 def search_wecima(movie_name):
     url = f"https://wecima.show/?s={movie_name.replace(' ', '+')}"
     r = requests.get(url, headers=headers)
@@ -74,7 +74,6 @@ def find_movie_link(title):
             print(f"Error in {site.__name__}: {e}")
     return None
 
-# التعامل مع المستخدم
 @dp.message_handler()
 async def handle(message: types.Message):
     user_id = message.from_user.id
@@ -98,7 +97,7 @@ async def handle(message: types.Message):
             video_data = requests.get(video_url, stream=True)
             filename = "video.mp4"
             with open(filename, "wb") as f:
-                for chunk in video_data.iter_content(chunk_size=1024 * 1024):
+                for chunk in video_data.iter_content(chunk_size=1024*1024):
                     if chunk:
                         f.write(chunk)
             with open(filename, "rb") as video:
@@ -111,19 +110,16 @@ async def handle(message: types.Message):
         await message.reply("❌ حدث خطأ أثناء المعالجة.")
         print("ERROR:", e)
 
-# عند بدء التشغيل
 async def on_startup(dp):
     await bot.set_webhook(WEBHOOK_URL)
-    print(f"🚀 Webhook set to {WEBHOOK_URL}")
+    print(f"Webhook set to {WEBHOOK_URL}")
 
-# عند الإغلاق
 async def on_shutdown(dp):
     await bot.delete_webhook()
+    await bot.session.close()  # <-- إغلاق جلسة aiohttp لتجنب الخطأ
 
-# التطبيق الأساسي
 if __name__ == "__main__":
-    import asyncio
-
+    os.makedirs("downloads", exist_ok=True)
     async def main():
         await on_startup(dp)
         app = web.Application()
@@ -132,7 +128,7 @@ if __name__ == "__main__":
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", PORT)
         await site.start()
-        print(f"✅ Running on {WEBHOOK_URL}")
+        print(f"Running on {WEBHOOK_URL}")
         while True:
             await asyncio.sleep(3600)
 
