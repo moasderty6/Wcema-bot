@@ -12,12 +12,12 @@ logging.basicConfig(level=logging.INFO)
 def find_video_url(movie_title):
     slug = movie_title.replace(" ", "-")
     search_url = f"https://wecima.org/?s={slug}"
-    r = requests.get(search_url, headers={"User-Agent":"Mozilla/5.0"})
+    r = requests.get(search_url, headers={"User-Agent": "Mozilla/5.0"})
     soup = BeautifulSoup(r.text, "html.parser")
     link = soup.select_one("h2.entry-title a")
     if not link:
         return None
-    page = requests.get(link["href"], headers={"User-Agent":"Mozilla/5.0"})
+    page = requests.get(link["href"], headers={"User-Agent": "Mozilla/5.0"})
     sp = BeautifulSoup(page.text, "html.parser")
     video_tag = sp.find("iframe") or sp.find("video")
     if not video_tag:
@@ -32,9 +32,7 @@ async def handle(message: types.Message):
         video_url = find_video_url(title)
         if not video_url:
             return await message.reply("❌ لم أجد رابط مشاهدة مباشر.")
-        await message.reply(f"🎬 {title}
-🔗 رابط:
-{video_url}")
+        await message.reply(f"🎬 {title}\n🔗 الرابط:\n{video_url}")
     except Exception as e:
         await message.reply("❌ حدث خطأ أثناء المعالجة.")
         print("ERROR:", e)
