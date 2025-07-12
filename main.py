@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, executor, types
 
-API_TOKEN = os.getenv("API_TOKEN")  # أضفه في متغيرات Render
+API_TOKEN = os.getenv("API_TOKEN")  # لازم تضيفه في متغيرات Render
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 logging.basicConfig(level=logging.INFO)
@@ -93,6 +93,8 @@ async def handle(message: types.Message):
         await message.reply("❌ حدث خطأ أثناء البحث أو التنزيل.")
         print("ERROR:", e)
 
-# ========= تشغيل البوت =========
+# ========= تشغيل البوت مع دعم البورت في Render =========
 if __name__ == "__main__":
+    PORT = int(os.getenv("PORT", 8080))  # بورت Render
+    # host 0.0.0.0 مهم ليستمع من جميع الواجهات
     executor.start_polling(dp, skip_updates=True)
