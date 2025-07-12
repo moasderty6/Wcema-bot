@@ -1,20 +1,24 @@
-# اسم الصورة الأساسية
+# استخدام Python الرسمي
 FROM python:3.10-slim
 
 # تثبيت المتطلبات الأساسية
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    aria2 \
-    && apt-get clean
+    build-essential \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# إعداد مجلد العمل
+# تعيين مجلد العمل
 WORKDIR /app
 
-# نسخ الملفات
+# نسخ الملفات إلى الحاوية
 COPY . .
 
-# تثبيت باكجات المشروع
+# تثبيت التبعيات
 RUN pip install --no-cache-dir -r requirements.txt
 
-# أمر التشغيل
+# تعيين المتغيرات البيئية
+ENV PYTHONUNBUFFERED=1
+
+# تشغيل البوت
 CMD ["python", "main.py"]
