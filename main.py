@@ -3,89 +3,90 @@ import logging
 import requests
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils.executor import start_polling
-from aiohttp import web
+from aiogram.utils.executor import start_webhook
 
-API_TOKEN = os.getenv("API_TOKEN")  # ضعه في متغيرات ريندر
-REQUIRED_CHANNEL = "@p2p_LRN"       # قناتك الإلزامية للاشتراك
+# إعداد البوت
+API_TOKEN = os.getenv("API_TOKEN")
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # مثال: https://your-app-name.onrender.com
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+PORT = int(os.environ.get("PORT", 8080))
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 logging.basicConfig(level=logging.INFO)
 
 headers = {"User-Agent": "Mozilla/5.0"}
+CHANNEL_USERNAME = "p2p_LRN"
 
-# البحث في المواقع الثلاثة
-def search_wecima(movie_name):
-    try:
-        url = f"https://wecima.show/?s={movie_name.replace(' ', '+')}"
-        soup = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
-        link = soup.select_one("h2.entry-title a")
-        if not link:
-            return None
-        page = requests.get(link["href"], headers=headers).text
-        iframe = BeautifulSoup(page, "html.parser").find("iframe")
-        return iframe.get("src") if iframe else None
-    except:
-        return None
-
-def search_cima4u(movie_name):
-    try:
-        url = f"https://my.cima4u.ws/search/{movie_name.replace(' ', '%20')}"
-        soup = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
-        link = soup.select_one("h3.title a")
-        if not link:
-            return None
-        page = requests.get(link["href"], headers=headers).text
-        iframe = BeautifulSoup(page, "html.parser").find("iframe")
-        return iframe.get("src") if iframe else None
-    except:
-        return None
-
-def search_egybest(movie_name):
-    try:
-        url = f"https://egybest.ltd/search/?q={movie_name.replace(' ', '+')}"
-        soup = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
-        link = soup.select_one("a.movie a")
-        if not link:
-            return None
-        page = requests.get(link["href"], headers=headers).text
-        iframe = BeautifulSoup(page, "html.parser").find("iframe")
-        return iframe.get("src") if iframe else None
-    except:
-        return None
-
-# يجمع بين كل المواقع
-def find_movie_link(title):
-    for func in [search_wecima, search_cima4u, search_egybest]:
-        link = func(title)
-        if link:
-            return link
-    return None
-
-# تحقق من الاشتراك في القناة
+# دالة التحقق من الاشتراك في القناة
 async def is_user_subscribed(user_id):
     try:
-        member = await bot.get_chat_member(REQUIRED_CHANNEL, user_id)
-        return member.status in ['member', 'creator', 'administrator']
+        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
+        return member.status in ['member', 'administrator', 'creator']
     except:
         return False
 
-# رسالة الاشتراك
-def get_subscription_keyboard():
-    buttons = [
-        [types.InlineKeyboardButton("🔔 اشترك الآن", url=f"https://t.me/{REQUIRED_CHANNEL.strip('@')}")]
-    ]
-    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+# مواقع المشاهدة
+def search_wecima(movie_name):
+    url = f"https://wecima.show/?s={movie_name.replace(' ', '+')}"
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "html.parser")
+    link = soup.select_one("h2.entry-title a")
+    if not link: return None
+    page = requests.get(link["href"], headers=headers)
+    soup = BeautifulSoup(page.text, "html.parser")
+    iframe = soup.find("iframe")
+    if iframe: return iframe.get("src")
+    return None
 
-# المعالجة
+def search_egybest(movie_name):
+    url = f"https://egybest.ltd/search/?q={movie_name.replace(' ', '+')}"
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "html.parser")
+    link = soup.select_one("a.movie a")
+    if not link: return None
+    page = requests.get(link["href"], headers=headers)
+    soup = BeautifulSoup(page.text, "html.parser")
+    iframe = soup.find("iframe")
+    if iframe: return iframe.get("src")
+    return None
+
+def search_cima4u(movie_name):
+    url = f"https://my.cima4u.ws/search/{movie_name.replace(' ', '%20')}"
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "html.parser")
+    link = soup.select_one("h3.title a")
+    if not link: return None
+    page = requests.get(link["href"], headers=headers)
+    soup = BeautifulSoup(page.text, "html.parser")
+    iframe = soup.find("iframe")
+    if iframe: return iframe.get("src")
+    return None
+
+def find_movie_link(title):
+    for site in [search_wecima, search_egybest, search_cima4u]:
+        try:
+            link = site(title)
+            if link:
+                return link
+        except Exception as e:
+            print(f"Error in {site.__name__}: {e}")
+    return None
+
+# الرد على المستخدمين
 @dp.message_handler()
-async def handle_message(message: types.Message):
-    if not await is_user_subscribed(message.from_user.id):
-        await message.reply("🚫 يجب الاشتراك في القناة أولاً لتحميل الفيلم:", reply_markup=get_subscription_keyboard())
+async def handle(message: types.Message):
+    user_id = message.from_user.id
+    title = message.text.strip()
+
+    if not await is_user_subscribed(user_id):
+        join_button = types.InlineKeyboardMarkup().add(
+            types.InlineKeyboardButton("اشترك في القناة 📢", url=f"https://t.me/{CHANNEL_USERNAME}")
+        )
+        await message.reply("❗ يجب عليك الاشتراك في القناة أولاً لتحميل الفيلم.", reply_markup=join_button)
         return
 
-    title = message.text.strip()
     await message.reply("🔍 جاري البحث عن الفيلم...")
 
     try:
@@ -94,10 +95,10 @@ async def handle_message(message: types.Message):
             return await message.reply("❌ لم أجد رابط للمشاهدة.")
 
         if video_url.endswith(".mp4"):
-            r = requests.get(video_url, stream=True)
-            filename = "movie.mp4"
+            video_data = requests.get(video_url, stream=True)
+            filename = "video.mp4"
             with open(filename, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024*1024):
+                for chunk in video_data.iter_content(chunk_size=1024*1024):
                     if chunk:
                         f.write(chunk)
             with open(filename, "rb") as video:
@@ -108,20 +109,25 @@ async def handle_message(message: types.Message):
 
     except Exception as e:
         await message.reply("❌ حدث خطأ أثناء المعالجة.")
-        print(f"Error: {e}")
+        print("ERROR:", e)
 
-# aiohttp web server لتشغيل البورت على Render
-async def handle_webhook(request):
-    return web.Response(text="✅ Bot is running")
+# عند التشغيل
+async def on_startup(dp):
+    await bot.set_webhook(WEBHOOK_URL)
 
-def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_webhook)
-    port = int(os.environ.get("PORT", 8080))
-    web.run_app(app, host="0.0.0.0", port=port)
+async def on_shutdown(dp):
+    await bot.delete_webhook()
 
-# تشغيل البوت مع البورت
+# التشغيل الفعلي باستخدام Webhook
 if __name__ == "__main__":
-    import threading
-    threading.Thread(target=start_web_server).start()
-    start_polling(dp, skip_updates=True)
+    from aiohttp import web
+    os.makedirs("downloads", exist_ok=True)
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        skip_updates=True,
+        host="0.0.0.0",
+        port=PORT
+    )
