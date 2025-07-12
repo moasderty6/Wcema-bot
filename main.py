@@ -1,112 +1,103 @@
 import os
 import logging
-import requests
-from bs4 import BeautifulSoup
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import Update
-from aiohttp import web
+import aiohttp
 import asyncio
+from bs4 import BeautifulSoup
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ParseMode
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 
 API_TOKEN = os.getenv("API_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # https://your-app-name.onrender.com
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-PORT = int(os.environ.get("PORT", 8080))
 CHANNEL_USERNAME = "p2p_LRN"
+PORT = int(os.getenv("PORT", 8080))
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
-logging.basicConfig(level=logging.INFO)
+bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher()
 
 headers = {"User-Agent": "Mozilla/5.0"}
 
-# التحقق من الاشتراك
-async def is_user_subscribed(user_id):
+async def is_user_subscribed(user_id: int) -> bool:
     try:
-        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
-        return member.status in ['member', 'administrator', 'creator']
+        member = await bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
+        return member.status in ("member", "administrator", "creator")
     except:
         return False
 
-# البحث عن الفيديو
 def search_wecima(movie_name):
-    url = f"https://wecima.show/?s={movie_name.replace(' ', '+')}"
-    r = requests.get(url, headers=headers)
-    soup = BeautifulSoup(r.text, "html.parser")
-    link = soup.select_one("h2.entry-title a")
-    if not link: return None
-    page = requests.get(link["href"], headers=headers)
-    soup = BeautifulSoup(page.text, "html.parser")
-    iframe = soup.find("iframe")
-    if iframe: return iframe.get("src")
-    return None
-
-def find_movie_link(title):
     try:
-        return search_wecima(title)
+        url = f"https://wecima.show/?s={movie_name.replace(' ', '+')}"
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        link = soup.select_one("h2.entry-title a")
+        if not link:
+            return None
+        page = requests.get(link["href"], headers=headers, timeout=10)
+        soup = BeautifulSoup(page.text, "html.parser")
+        iframe = soup.find("iframe")
+        if iframe:
+            return iframe.get("src")
+        return None
     except Exception as e:
-        print(f"Search error: {e}")
+        print("Scraping Error:", e)
         return None
 
-# رسالة المستخدم
-@dp.message_handler()
-async def handle(message: types.Message):
+@dp.message(F.text)
+async def handle_message(message: Message):
     user_id = message.from_user.id
-    title = message.text.strip()
+    movie_name = message.text.strip()
 
+    # تحقق من الاشتراك
     if not await is_user_subscribed(user_id):
-        join_button = types.InlineKeyboardMarkup().add(
-            types.InlineKeyboardButton("اشترك في القناة 📢", url=f"https://t.me/{CHANNEL_USERNAME}")
-        )
-        await message.reply("❗ يجب عليك الاشتراك في القناة أولاً لتحميل الفيلم.", reply_markup=join_button)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📢 اشترك أولاً في القناة", url=f"https://t.me/{CHANNEL_USERNAME}")]
+        ])
+        await message.answer("❗ يجب الاشتراك في القناة أولاً لتحميل الفيلم.", reply_markup=kb)
         return
 
-    await message.reply("🔍 جاري البحث عن الفيلم...")
+    await message.answer("🔍 جارٍ البحث عن الفيلم...")
 
-    try:
-        video_url = find_movie_link(title)
-        if not video_url:
-            return await message.reply("❌ لم أجد رابط للمشاهدة.")
+    video_url = await asyncio.to_thread(search_wecima, movie_name)
 
-        await message.reply(f"🎬 {title}\n🔗 رابط المشاهدة:\n{video_url}")
-    except Exception as e:
-        await message.reply("❌ حدث خطأ أثناء المعالجة.")
-        print("ERROR:", e)
-
-# Webhook route
-async def webhook_handler(request):
-    try:
-        data = await request.json()
-        update = Update.to_object(data)
-        await dp.feed_update(bot, update)
-    except Exception as e:
-        logging.error(f"Failed to handle update: {e}")
-    return web.Response()
+    if not video_url:
+        await message.answer("❌ لم أجد رابط للمشاهدة.")
+    else:
+        await message.answer(f"🎬 <b>{movie_name}</b>\n🔗 <code>{video_url}</code>")
 
 # Webhook startup
-async def on_startup():
+async def on_startup(bot: Bot):
     await bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"Webhook set to {WEBHOOK_URL}")
+    print(f"✅ Webhook set to: {WEBHOOK_URL}")
 
 # Webhook shutdown
-async def on_shutdown():
+async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
-    await bot.session.close()
+    print("❌ Webhook removed")
 
-# Main app
+# تشغيل التطبيق
 async def main():
-    await on_startup()
     app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, webhook_handler)
+    app["bot"] = bot
+
+    setup_application(app, dp, bot=bot)
+    app.on_startup.append(lambda _: on_startup(bot))
+    app.on_shutdown.append(lambda _: on_shutdown(bot))
+
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
 
-    print(f"Running on {WEBHOOK_URL}")
+    print("🚀 Bot is running...")
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
+    import requests
     asyncio.run(main())
