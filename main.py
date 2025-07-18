@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import aiohttp
+import secrets # <--- Import this to generate a secure token
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,21 +11,22 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiogram.client.default import DefaultBotProperties
 from aiohttp import web
 
-# --- الإعدادات الأساسية ---
+# --- Basic Settings ---
 API_TOKEN = os.getenv("API_TOKEN")
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
 WEBHOOK_PATH = f"/bot/{API_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+# <--- Change: Generate a simple, secure secret token
+WEBHOOK_SECRET = secrets.token_urlsafe(32) 
 CHANNEL_USERNAME = "p2p_LRN"
 PORT = int(os.getenv("PORT", 8080))
 
-# --- إعداد البوت ---
+# --- Bot Setup ---
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# --- دوال مساعدة ---
+# --- Helper Functions ---
 async def is_user_subscribed(user_id: int) -> bool:
-    """التحقق من اشتراك المستخدم في القناة"""
     try:
         member = await bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
         return member.status in ("member", "administrator", "creator")
@@ -33,12 +35,10 @@ async def is_user_subscribed(user_id: int) -> bool:
         return False
 
 async def search_wecima_async(session: aiohttp.ClientSession, movie_name: str) -> str | None:
-    """البحث عن رابط الفيلم باستخدام aiohttp"""
     search_url = f"https://wecima.show/search/{movie_name.replace(' ', '+')}/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
 
     try:
-        # 1. البحث عن الفيلم
         async with session.get(search_url, headers=headers, timeout=15) as response:
             if response.status != 200:
                 logging.error(f"Search failed with status: {response.status}")
@@ -52,7 +52,6 @@ async def search_wecima_async(session: aiohttp.ClientSession, movie_name: str) -
             
             movie_page_url = movie_link_tag['href']
 
-        # 2. الدخول لصفحة الفيلم وجلب رابط المشاهدة
         async with session.get(movie_page_url, headers=headers, timeout=15) as page_response:
             if page_response.status != 200:
                 logging.error(f"Movie page failed with status: {page_response.status}")
@@ -70,7 +69,7 @@ async def search_wecima_async(session: aiohttp.ClientSession, movie_name: str) -
         logging.error(f"Scraping Error for '{movie_name}': {e}")
         return None
 
-# --- معالجات الرسائل ---
+# --- Message Handlers ---
 @dp.message(F.text)
 async def handle_message(message: Message, session: aiohttp.ClientSession):
     user_id = message.from_user.id
@@ -92,28 +91,24 @@ async def handle_message(message: Message, session: aiohttp.ClientSession):
     else:
         await msg.edit_text(f"❌ عذراً, لم أتمكن من العثور على رابط مشاهدة للفيلم: <b>{movie_name}</b>")
 
-# --- إعداد وتشغيل Webhook ---
+# --- Webhook Setup and Shutdown ---
 async def on_startup(bot: Bot):
-    await bot.set_webhook(WEBHOOK_URL, secret_token=API_TOKEN)
+    # <--- Change: Use the new secret token variable
+    await bot.set_webhook(WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
     logging.info(f"Webhook set to: {WEBHOOK_URL}")
 
-# <--- تعديل: إضافة دالة لإغلاق الجلسة عند إيقاف البوت
 async def on_shutdown(app: web.Application):
-    """Closes the aiohttp session when the bot shuts down."""
     logging.info("Closing aiohttp session...")
     if "session" in dp:
         await dp["session"].close()
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-
     dp["session"] = aiohttp.ClientSession()
-
     app = web.Application()
     
-    # ربط دوال بدء وإيقاف التشغيل
     app.on_startup.append(lambda _: on_startup(bot))
-    app.on_shutdown.append(on_shutdown) # <--- تعديل: ربط دالة الإيقاف
+    app.on_shutdown.append(on_shutdown)
 
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
