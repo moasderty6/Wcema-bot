@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiogram.client.default import DefaultBotProperties # <--- تم استيراد هذا
+from aiogram.client.default import DefaultBotProperties
 from aiohttp import web
 
 # --- الإعدادات الأساسية ---
@@ -19,7 +19,6 @@ CHANNEL_USERNAME = "p2p_LRN"
 PORT = int(os.getenv("PORT", 8080))
 
 # --- إعداد البوت ---
-# <--- تم تعديل هذا السطر ليوافق الإصدار الجديد
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
@@ -94,9 +93,16 @@ async def handle_message(message: Message, session: aiohttp.ClientSession):
         await msg.edit_text(f"❌ عذراً, لم أتمكن من العثور على رابط مشاهدة للفيلم: <b>{movie_name}</b>")
 
 # --- إعداد وتشغيل Webhook ---
-async def on_startup(bot: Bot, app: web.Application):
+async def on_startup(bot: Bot):
     await bot.set_webhook(WEBHOOK_URL, secret_token=API_TOKEN)
     logging.info(f"Webhook set to: {WEBHOOK_URL}")
+
+# <--- تعديل: إضافة دالة لإغلاق الجلسة عند إيقاف البوت
+async def on_shutdown(app: web.Application):
+    """Closes the aiohttp session when the bot shuts down."""
+    logging.info("Closing aiohttp session...")
+    if "session" in dp:
+        await dp["session"].close()
 
 async def main():
     logging.basicConfig(level=logging.INFO)
@@ -104,7 +110,10 @@ async def main():
     dp["session"] = aiohttp.ClientSession()
 
     app = web.Application()
-    app.on_startup.append(lambda a: on_startup(bot, a))
+    
+    # ربط دوال بدء وإيقاف التشغيل
+    app.on_startup.append(lambda _: on_startup(bot))
+    app.on_shutdown.append(on_shutdown) # <--- تعديل: ربط دالة الإيقاف
 
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
@@ -121,4 +130,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Bot stopped manually.")
-
