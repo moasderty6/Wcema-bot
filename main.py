@@ -7,19 +7,20 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiogram.client.default import DefaultBotProperties # <--- تم استيراد هذا
 from aiohttp import web
 
 # --- الإعدادات الأساسية ---
-# <--- تعديل: تنظيم المتغيرات
 API_TOKEN = os.getenv("API_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # مثال: https://your-app-name.onrender.com
-WEBHOOK_PATH = f"/bot/{API_TOKEN}" # مسار فريد وآمن
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
+WEBHOOK_PATH = f"/bot/{API_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 CHANNEL_USERNAME = "p2p_LRN"
 PORT = int(os.getenv("PORT", 8080))
 
 # --- إعداد البوت ---
-bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
+# <--- تم تعديل هذا السطر ليوافق الإصدار الجديد
+bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 # --- دوال مساعدة ---
@@ -32,7 +33,6 @@ async def is_user_subscribed(user_id: int) -> bool:
         logging.error(f"Error checking subscription for {user_id}: {e}")
         return False
 
-# <--- تعديل: تم إعادة كتابة الدالة بالكامل لتكون غير متزامنة (Asynchronous)
 async def search_wecima_async(session: aiohttp.ClientSession, movie_name: str) -> str | None:
     """البحث عن رابط الفيلم باستخدام aiohttp"""
     search_url = f"https://wecima.show/search/{movie_name.replace(' ', '+')}/"
@@ -46,7 +46,6 @@ async def search_wecima_async(session: aiohttp.ClientSession, movie_name: str) -
                 return None
             
             soup = BeautifulSoup(await response.text(), "html.parser")
-            # <--- تعديل: استخدام محدد CSS أكثر دقة
             movie_link_tag = soup.select_one("div.Grid--WecimaPosts div.Thumb--Grid a")
             if not movie_link_tag or not movie_link_tag.has_attr('href'):
                 logging.warning(f"No movie link found for '{movie_name}'")
@@ -96,13 +95,12 @@ async def handle_message(message: Message, session: aiohttp.ClientSession):
 
 # --- إعداد وتشغيل Webhook ---
 async def on_startup(bot: Bot, app: web.Application):
-    await bot.set_webhook(WEBHOOK_URL, secret_token=API_TOKEN) # استخدام secret_token للأمان
+    await bot.set_webhook(WEBHOOK_URL, secret_token=API_TOKEN)
     logging.info(f"Webhook set to: {WEBHOOK_URL}")
 
 async def main():
     logging.basicConfig(level=logging.INFO)
 
-    # تمرير aiohttp.ClientSession إلى كل المعالجات
     dp["session"] = aiohttp.ClientSession()
 
     app = web.Application()
@@ -111,13 +109,12 @@ async def main():
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
     
-    # <--- تعديل: طريقة التشغيل الصحيحة لـ aiohttp بدون حلقة while
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     logging.info(f"🚀 Bot is running on port {PORT}...")
-    await asyncio.Event().wait() # يبقي التطبيق يعمل إلى الأبد
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
