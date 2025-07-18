@@ -5,7 +5,7 @@ FROM python:3.10-slim
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    ffmpeg \ # <--- الإضافة الأساسية هنا
+    ffmpeg \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -13,7 +13,6 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # نسخ الملفات إلى الحاوية
-# الأفضل نسخ ملف المتطلبات أولاً للاستفادة من التخزين المؤقت (caching)
 COPY requirements.txt .
 
 # تثبيت التبعيات
@@ -27,3 +26,4 @@ ENV PYTHONUNBUFFERED=1
 
 # تشغيل البوت (تأكد من أن اسم الملف صحيح)
 CMD ["python", "main.py"]
+
