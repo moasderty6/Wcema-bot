@@ -15,7 +15,7 @@ WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # مثال: https://your-service.onren
 WEBHOOK_PATH = f"/bot/{API_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 CHANNEL_USERNAME = "p2p_LRN"
-PORT = int(os.getenv("PORT", 8080))
+PORT = int(os.getenv("PORT") or 8080)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 openai.api_key = OPENAI_API_KEY
