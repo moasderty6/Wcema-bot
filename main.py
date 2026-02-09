@@ -1,15 +1,14 @@
 import os
 import logging
 import asyncio
-import aiohttp
+from aiohttp import web
+import openai
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
-import openai
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 
-# --- إعدادات ---
+# ===== إعدادات =====
 API_TOKEN = os.getenv("API_TOKEN")
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # مثال: https://your-service.onrender.com
 WEBHOOK_PATH = f"/bot/{API_TOKEN}"
@@ -37,10 +36,11 @@ messages = {
     "not_found": {"ar": "❌ لم أتمكن من العثور على رابط للفيلم/الحلقة.", "en": "❌ Could not find a link for the movie/episode."}
 }
 
-# ===== Inline Keyboard =====
+# ===== Keyboards =====
 def lang_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("🇦🇪 عربي", callback_data="lang_ar"), InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")]
+        [InlineKeyboardButton("🇦🇪 عربي", callback_data="lang_ar"),
+         InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")]
     ])
 
 def type_keyboard(lang):
@@ -59,7 +59,6 @@ async def is_user_subscribed(user_id: int) -> bool:
         return False
 
 async def get_ai_correct_title(title: str, content_type: str) -> str:
-    """Use OpenAI API to correct/normalize the movie/series title"""
     try:
         prompt = f"Find the correct name for this {content_type}: '{title}' and return just the title."
         response = openai.Completion.create(
@@ -68,39 +67,37 @@ async def get_ai_correct_title(title: str, content_type: str) -> str:
             max_tokens=30
         )
         corrected = response.choices[0].text.strip()
-        if corrected:
-            return corrected
-        return title
+        return corrected or title
     except Exception as e:
         logging.error(f"AI Error: {e}")
-        return title  # fallback
+        return title
 
-async def search_links(title: str, content_type: str) -> str | None:
-    """Mock function: replace with real scraping/API"""
+async def search_links(title: str, content_type: str) -> str:
+    """Mock: استبدل بالبحث الفعلي من مواقع أو API"""
     return f"https://example.com/watch/{title.replace(' ', '_')}"
 
 # ===== Handlers =====
 @dp.message(F.command == "start")
 async def start(message: types.Message):
-    user_id = message.from_user.id
-    user_state[user_id] = {}
+    user_state[message.from_user.id] = {}
     await message.answer(messages["choose_lang"]["en"], reply_markup=lang_keyboard())
 
 @dp.callback_query(F.data)
 async def callback_handler(query: types.CallbackQuery):
     user_id = query.from_user.id
     data = query.data
-
     if user_id not in user_state:
         user_state[user_id] = {}
 
+    # اختيار اللغة
     if data.startswith("lang_"):
-        lang = "ar" if data=="lang_ar" else "en"
+        lang = "ar" if data == "lang_ar" else "en"
         user_state[user_id]["lang"] = lang
         await query.message.edit_text(messages["choose_type"][lang], reply_markup=type_keyboard(lang))
 
+    # اختيار النوع
     elif data.startswith("type_"):
-        content_type = "movie" if data=="type_movie" else "series"
+        content_type = "movie" if data == "type_movie" else "series"
         user_state[user_id]["type"] = content_type
         lang = user_state[user_id]["lang"]
 
@@ -123,42 +120,31 @@ async def handle_message(message: types.Message):
     state = user_state[user_id]
     lang = state.get("lang", "en")
 
+    # اسم الفيلم/المسلسل
     if "title" not in state:
-        # Movie or Series title
         state["title"] = message.text.strip()
-        corrected_title = await get_ai_correct_title(state["title"], state["type"])
-        state["title"] = corrected_title
+        state["title"] = await get_ai_correct_title(state["title"], state["type"])
 
         if state["type"] == "series":
             await message.answer(messages["enter_episode"][lang])
         else:
             await message.answer(messages["searching"][lang])
-            link = await search_links(corrected_title, "movie")
-            if link:
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton("🎬 Watch", url=link)]
-                ])
-                await message.answer(f"🎬 <b>{corrected_title}</b>", reply_markup=kb)
-            else:
-                await message.answer(messages["not_found"][lang])
+            link = await search_links(state["title"], "movie")
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎬 Watch", url=link)]])
+            await message.answer(f"🎬 <b>{state['title']}</b>", reply_markup=kb)
             user_state.pop(user_id)
 
     else:
-        # Series episode
+        # رقم الحلقة للمسلسل
         if state["type"] == "series":
             state["episode"] = message.text.strip()
             await message.answer(messages["searching"][lang])
             link = await search_links(f"{state['title']}_E{state['episode']}", "series")
-            if link:
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton("🎬 Watch Episode", url=link)]
-                ])
-                await message.answer(f"🎬 <b>{state['title']} - Episode {state['episode']}</b>", reply_markup=kb)
-            else:
-                await message.answer(messages["not_found"][lang])
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎬 Watch Episode", url=link)]])
+            await message.answer(f"🎬 <b>{state['title']} - Episode {state['episode']}</b>", reply_markup=kb)
             user_state.pop(user_id)
 
-# ===== Webhook Setup =====
+# ===== Webhook =====
 async def on_startup(app: web.Application):
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook set to: {WEBHOOK_URL}")
@@ -169,20 +155,17 @@ async def on_shutdown(app: web.Application):
 async def main():
     logging.basicConfig(level=logging.INFO)
     app = web.Application()
-    
-    # Webhook
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
-    
-    # تسجيل SimpleRequestHandler على المسار
+
+    # تسجيل POST handler على Webhook path
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-    
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     logging.info(f"🚀 Bot running on port {PORT}...")
-    
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
