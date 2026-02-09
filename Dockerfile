@@ -2,11 +2,11 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# تثبيت المتطلبات
+# نسخ ملف المتطلبات وتثبيتها
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# نسخ المشروع
+# نسخ باقي المشروع
 COPY . .
 
 # تشغيل البوت
