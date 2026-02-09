@@ -5,7 +5,6 @@ import openai
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters.command import CommandStart
-from aiogram.filters.text import Text
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -106,7 +105,8 @@ async def cb(q: types.CallbackQuery):
         user_state[uid]["type"] = data
         await q.message.answer(TXT["enter_title"][user_state[uid]["lang"]])
 
-@dp.message(Text())
+# ===== كل الرسائل النصية تدخل هنا =====
+@dp.message(lambda msg: True)
 async def text_handler(msg: types.Message):
     uid = msg.from_user.id
     if uid not in user_state:
@@ -116,6 +116,7 @@ async def text_handler(msg: types.Message):
     st = user_state[uid]
     lang = st.get("lang", "en")
 
+    # ===== التعامل مع اسم الفيلم أو المسلسل =====
     if "title" not in st:
         st["title"] = await ai_fix(msg.text)
         if st["type"] == "series":
@@ -126,6 +127,7 @@ async def text_handler(msg: types.Message):
             await msg.answer(f"🎬 <b>{st['title']}</b>\n{link}")
             user_state.pop(uid)
     else:
+        # ===== التعامل مع رقم الحلقة =====
         ep = msg.text
         await msg.answer(TXT["searching"][lang])
         link = fake_link(f"{st['title']}_E{ep}")
