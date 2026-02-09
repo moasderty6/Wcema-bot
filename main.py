@@ -4,9 +4,10 @@ import asyncio
 import openai
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Text
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 
 # ========= SETTINGS =========
@@ -21,7 +22,11 @@ WEBHOOK_URL = WEBHOOK_HOST + WEBHOOK_PATH
 
 openai.api_key = OPENAI_API_KEY
 
-bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
+# ===== Bot setup using DefaultBotProperties =====
+bot = Bot(
+    token=API_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
 
 logging.basicConfig(level=logging.INFO)
@@ -54,14 +59,14 @@ def type_kb(lang):
     ])
 
 # ========= HELPERS =========
-async def subscribed(user_id):
+async def subscribed(user_id: int) -> bool:
     try:
         m = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return m.status in ("member", "administrator", "creator")
     except:
         return False
 
-async def ai_fix(title):
+async def ai_fix(title: str) -> str:
     try:
         res = openai.Completion.create(
             model="text-davinci-003",
@@ -69,10 +74,11 @@ async def ai_fix(title):
             max_tokens=20
         )
         return res.choices[0].text.strip() or title
-    except:
+    except Exception as e:
+        logging.error(f"AI Error: {e}")
         return title
 
-def fake_link(name):
+def fake_link(name: str) -> str:
     return f"https://example.com/watch/{name.replace(' ', '_')}"
 
 # ========= HANDLERS =========
@@ -99,12 +105,13 @@ async def cb(q: types.CallbackQuery):
         user_state[uid]["type"] = data
         await q.message.answer(TXT["enter_title"][user_state[uid]["lang"]])
 
-@dp.message(F.text)
+@dp.message(Text())
 async def text_handler(msg: types.Message):
     uid = msg.from_user.id
     if uid not in user_state:
         await msg.answer("اكتب /start")
         return
+
     st = user_state[uid]
     lang = st.get("lang", "en")
 
@@ -124,24 +131,7 @@ async def text_handler(msg: types.Message):
         await msg.answer(f"📺 <b>{st['title']} – Ep {ep}</b>\n{link}")
         user_state.pop(uid)
 
-@dp.callback_query(F.data)
-async def cb(q: types.CallbackQuery):
-    uid = q.from_user.id
-    data = q.data
-    user_state.setdefault(uid, {})
-
-    if data.startswith("lang_"):
-        lang = "ar" if "ar" in data else "en"
-        user_state[uid]["lang"] = lang
-        await q.message.edit_text(TXT["choose_type"][lang], reply_markup=type_kb(lang))
-
-    elif data in ("movie", "series"):
-        if not await subscribed(uid):
-            await q.message.answer(TXT["not_sub"]["en"])
-            return
-        user_state[uid]["type"] = data
-        await q.message.answer(TXT["enter_title"][user_state[uid]["lang"]])
-# ========= RUN WEBHOOK =========
+# ========= WEBHOOK =========
 async def healthcheck(request):
     return web.Response(text="OK")
 
@@ -151,11 +141,12 @@ async def on_startup(app):
 
 async def on_shutdown(app):
     await bot.delete_webhook()
+    logging.info("Bot shutdown")
 
 def main():
     app = web.Application()
     app.router.add_get("/", healthcheck)
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
+    SimpleRequestHandler(dp, bot).register(app, path=WEBHOOK_PATH)
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
     web.run_app(app, host="0.0.0.0", port=PORT)
