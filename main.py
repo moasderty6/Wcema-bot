@@ -1,175 +1,127 @@
 import os
 import logging
 import asyncio
-from aiohttp import web
 import openai
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 
-# ===== إعدادات =====
+# ========= SETTINGS =========
 API_TOKEN = os.getenv("API_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # مثال: https://your-service.onrender.com
-WEBHOOK_PATH = f"/bot/{API_TOKEN}"
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-CHANNEL_USERNAME = "p2p_LRN"
-PORT = int(os.getenv("PORT") or 8080)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+CHANNEL_USERNAME = "p2p_LRN"
 
 openai.api_key = OPENAI_API_KEY
 
 bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
 
-# ===== قاعدة بيانات مؤقتة لحالة المستخدم =====
+logging.basicConfig(level=logging.INFO)
+
+# ========= USER STATE =========
 user_state = {}
 
-# ===== رسائل حسب اللغة =====
-messages = {
-    "choose_lang": {"ar": "اختر اللغة / Choose Language:", "en": "Choose your language / اختر اللغة:"},
-    "choose_type": {"ar": "هل تريد بحث عن فيلم أم مسلسل؟", "en": "Do you want a Movie or Series?"},
-    "enter_title": {"ar": "📌 أرسل اسم الفيلم أو المسلسل:", "en": "📌 Send the Movie or Series title:"},
-    "enter_episode": {"ar": "📌 أرسل رقم الحلقة:", "en": "📌 Send the episode number:"},
-    "not_subscribed": {"ar": "❗ يجب الاشتراك في القناة أولاً:", "en": "❗ You must subscribe to the channel first:"},
+# ========= MESSAGES =========
+TXT = {
+    "choose_lang": {"ar": "اختر اللغة:", "en": "Choose language:"},
+    "choose_type": {"ar": "فيلم أم مسلسل؟", "en": "Movie or Series?"},
+    "enter_title": {"ar": "📌 اكتب الاسم:", "en": "📌 Send title:"},
+    "enter_episode": {"ar": "📌 رقم الحلقة:", "en": "📌 Episode number:"},
     "searching": {"ar": "🔍 جاري البحث...", "en": "🔍 Searching..."},
-    "not_found": {"ar": "❌ لم أتمكن من العثور على رابط للفيلم/الحلقة.", "en": "❌ Could not find a link for the movie/episode."}
+    "not_sub": {"ar": "❗ اشترك بالقناة أولاً", "en": "❗ Subscribe first"},
 }
 
-# ===== Keyboards =====
-def lang_keyboard():
+# ========= KEYBOARDS =========
+def lang_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton("🇦🇪 عربي", callback_data="lang_ar"),
          InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")]
     ])
 
-def type_keyboard(lang):
-    text = {"ar": ["فيلم", "مسلسل"], "en": ["Movie", "Series"]}
+def type_kb(lang):
+    t = {"ar": ["🎬 فيلم", "📺 مسلسل"], "en": ["🎬 Movie", "📺 Series"]}
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text[lang][0], callback_data="type_movie"),
-         InlineKeyboardButton(text[lang][1], callback_data="type_series")]
+        [InlineKeyboardButton(t[lang][0], callback_data="movie"),
+         InlineKeyboardButton(t[lang][1], callback_data="series")]
     ])
 
-# ===== Helpers =====
-async def is_user_subscribed(user_id: int) -> bool:
+# ========= HELPERS =========
+async def subscribed(user_id):
     try:
-        member = await bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
-        return member.status in ("member", "administrator", "creator")
+        m = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
+        return m.status in ("member", "administrator", "creator")
     except:
         return False
 
-async def get_ai_correct_title(title: str, content_type: str) -> str:
+async def ai_fix(title):
     try:
-        prompt = f"Find the correct name for this {content_type}: '{title}' and return just the title."
-        response = openai.Completion.create(
+        res = openai.Completion.create(
             model="text-davinci-003",
-            prompt=prompt,
-            max_tokens=30
+            prompt=f"Correct movie or series title: {title}",
+            max_tokens=20
         )
-        corrected = response.choices[0].text.strip()
-        return corrected or title
-    except Exception as e:
-        logging.error(f"AI Error: {e}")
+        return res.choices[0].text.strip() or title
+    except:
         return title
 
-async def search_links(title: str, content_type: str) -> str:
-    """Mock: استبدل بالبحث الفعلي من مواقع أو API"""
-    return f"https://example.com/watch/{title.replace(' ', '_')}"
+def fake_link(name):
+    return f"https://example.com/watch/{name.replace(' ', '_')}"
 
-# ===== Handlers =====
+# ========= HANDLERS =========
 @dp.message(F.command == "start")
-async def start(message: types.Message):
-    user_state[message.from_user.id] = {}
-    await message.answer(messages["choose_lang"]["en"], reply_markup=lang_keyboard())
+async def start(msg: types.Message):
+    user_state[msg.from_user.id] = {}
+    await msg.answer(TXT["choose_lang"]["en"], reply_markup=lang_kb())
 
-@dp.callback_query(F.data)
-async def callback_handler(query: types.CallbackQuery):
-    user_id = query.from_user.id
-    data = query.data
-    if user_id not in user_state:
-        user_state[user_id] = {}
+@dp.callback_query()
+async def cb(q: types.CallbackQuery):
+    uid = q.from_user.id
+    data = q.data
+    user_state.setdefault(uid, {})
 
-    # اختيار اللغة
     if data.startswith("lang_"):
-        lang = "ar" if data == "lang_ar" else "en"
-        user_state[user_id]["lang"] = lang
-        await query.message.edit_text(messages["choose_type"][lang], reply_markup=type_keyboard(lang))
+        lang = "ar" if "ar" in data else "en"
+        user_state[uid]["lang"] = lang
+        await q.message.edit_text(TXT["choose_type"][lang], reply_markup=type_kb(lang))
 
-    # اختيار النوع
-    elif data.startswith("type_"):
-        content_type = "movie" if data == "type_movie" else "series"
-        user_state[user_id]["type"] = content_type
-        lang = user_state[user_id]["lang"]
-
-        if not await is_user_subscribed(user_id):
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton("📢 اشترك بالقناة", url=f"https://t.me/{CHANNEL_USERNAME}")]
-            ])
-            await query.message.edit_text(messages["not_subscribed"][lang], reply_markup=kb)
+    elif data in ("movie", "series"):
+        if not await subscribed(uid):
+            await q.message.answer(TXT["not_sub"]["en"])
             return
-
-        await query.message.edit_text(messages["enter_title"][lang])
+        user_state[uid]["type"] = data
+        await q.message.answer(TXT["enter_title"][user_state[uid]["lang"]])
 
 @dp.message(F.text)
-async def handle_message(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in user_state:
-        await message.answer("❗ Please press /start first")
+async def text_handler(msg: types.Message):
+    uid = msg.from_user.id
+    if uid not in user_state:
+        await msg.answer("اكتب /start")
         return
 
-    state = user_state[user_id]
-    lang = state.get("lang", "en")
+    st = user_state[uid]
+    lang = st.get("lang", "en")
 
-    # اسم الفيلم/المسلسل
-    if "title" not in state:
-        state["title"] = message.text.strip()
-        state["title"] = await get_ai_correct_title(state["title"], state["type"])
+    if "title" not in st:
+        st["title"] = await ai_fix(msg.text)
 
-        if state["type"] == "series":
-            await message.answer(messages["enter_episode"][lang])
+        if st["type"] == "series":
+            await msg.answer(TXT["enter_episode"][lang])
         else:
-            await message.answer(messages["searching"][lang])
-            link = await search_links(state["title"], "movie")
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎬 Watch", url=link)]])
-            await message.answer(f"🎬 <b>{state['title']}</b>", reply_markup=kb)
-            user_state.pop(user_id)
+            await msg.answer(TXT["searching"][lang])
+            link = fake_link(st["title"])
+            await msg.answer(f"🎬 <b>{st['title']}</b>\n{link}")
+            user_state.pop(uid)
 
     else:
-        # رقم الحلقة للمسلسل
-        if state["type"] == "series":
-            state["episode"] = message.text.strip()
-            await message.answer(messages["searching"][lang])
-            link = await search_links(f"{state['title']}_E{state['episode']}", "series")
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎬 Watch Episode", url=link)]])
-            await message.answer(f"🎬 <b>{state['title']} - Episode {state['episode']}</b>", reply_markup=kb)
-            user_state.pop(user_id)
+        ep = msg.text
+        await msg.answer(TXT["searching"][lang])
+        link = fake_link(f"{st['title']}_E{ep}")
+        await msg.answer(f"📺 <b>{st['title']} – Ep {ep}</b>\n{link}")
+        user_state.pop(uid)
 
-# ===== Webhook =====
-async def on_startup(app: web.Application):
-    await bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"Webhook set to: {WEBHOOK_URL}")
-
-async def on_shutdown(app: web.Application):
-    logging.info("Shutting down...")
-
+# ========= RUN =========
 async def main():
-    logging.basicConfig(level=logging.INFO)
-    app = web.Application()
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
-
-    # تسجيل POST handler على Webhook path
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logging.info(f"🚀 Bot running on port {PORT}...")
-    await asyncio.Event().wait()
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot stopped manually.")
+    asyncio.run(main())
