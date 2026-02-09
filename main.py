@@ -169,15 +169,20 @@ async def on_shutdown(app: web.Application):
 async def main():
     logging.basicConfig(level=logging.INFO)
     app = web.Application()
+    
+    # Webhook
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
+    
+    # تسجيل SimpleRequestHandler على المسار
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-    setup_application(app, dp, bot=bot)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     logging.info(f"🚀 Bot running on port {PORT}...")
+    
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
