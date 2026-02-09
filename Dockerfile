@@ -1,12 +1,13 @@
+# استخدام نسخة بايثون خفيفة
 FROM python:3.10-slim
 
+# ضبط مجلد العمل
 WORKDIR /app
 
-# نسخ ملف المتطلبات وتثبيتها
+# نسخ الملفات
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# نسخ باقي المشروع
 COPY . .
 
 # تشغيل البوت
