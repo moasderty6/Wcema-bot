@@ -4,7 +4,8 @@ import asyncio
 import openai
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart, Text
+from aiogram.filters.command import CommandStart
+from aiogram.filters.text import Text
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
