@@ -1,7 +1,7 @@
-# استخدام Python الرسمي
+# استخدم Python الرسمي
 FROM python:3.10-slim
 
-# تثبيت المتطلبات الأساسية بالإضافة إلى ffmpeg
+# تثبيت المتطلبات الأساسية
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
@@ -9,21 +9,18 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# تعيين مجلد العمل
+# مجلد العمل
 WORKDIR /app
 
-# نسخ الملفات إلى الحاوية
+# نسخ وتثبيت التبعيات
 COPY requirements.txt .
-
-# تثبيت التبعيات
 RUN pip install --no-cache-dir -r requirements.txt
 
 # نسخ باقي ملفات المشروع
 COPY . .
 
-# تعيين المتغيرات البيئية
+# متغيرات البيئة
 ENV PYTHONUNBUFFERED=1
 
-# تشغيل البوت (تأكد من أن اسم الملف صحيح)
+# تشغيل البوت باستخدام Webhook
 CMD ["python", "main.py"]
-
