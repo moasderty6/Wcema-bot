@@ -99,19 +99,17 @@ async def cb(q: types.CallbackQuery):
         user_state[uid]["type"] = data
         await q.message.answer(TXT["enter_title"][user_state[uid]["lang"]])
 
-@dp.message()
+@dp.message(F.text)
 async def text_handler(msg: types.Message):
     uid = msg.from_user.id
     if uid not in user_state:
         await msg.answer("اكتب /start")
         return
-
     st = user_state[uid]
     lang = st.get("lang", "en")
 
     if "title" not in st:
         st["title"] = await ai_fix(msg.text)
-
         if st["type"] == "series":
             await msg.answer(TXT["enter_episode"][lang])
         else:
@@ -119,7 +117,6 @@ async def text_handler(msg: types.Message):
             link = fake_link(st["title"])
             await msg.answer(f"🎬 <b>{st['title']}</b>\n{link}")
             user_state.pop(uid)
-
     else:
         ep = msg.text
         await msg.answer(TXT["searching"][lang])
@@ -127,6 +124,23 @@ async def text_handler(msg: types.Message):
         await msg.answer(f"📺 <b>{st['title']} – Ep {ep}</b>\n{link}")
         user_state.pop(uid)
 
+@dp.callback_query(F.data)
+async def cb(q: types.CallbackQuery):
+    uid = q.from_user.id
+    data = q.data
+    user_state.setdefault(uid, {})
+
+    if data.startswith("lang_"):
+        lang = "ar" if "ar" in data else "en"
+        user_state[uid]["lang"] = lang
+        await q.message.edit_text(TXT["choose_type"][lang], reply_markup=type_kb(lang))
+
+    elif data in ("movie", "series"):
+        if not await subscribed(uid):
+            await q.message.answer(TXT["not_sub"]["en"])
+            return
+        user_state[uid]["type"] = data
+        await q.message.answer(TXT["enter_title"][user_state[uid]["lang"]])
 # ========= RUN WEBHOOK =========
 async def healthcheck(request):
     return web.Response(text="OK")
