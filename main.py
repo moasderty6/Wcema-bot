@@ -2,9 +2,12 @@ import os
 import asyncio
 import logging
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types
+
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 
+# ========= CONFIG =========
 API_TOKEN = os.getenv("API_TOKEN")
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # https://xxx.onrender.com
 PORT = int(os.getenv("PORT") or 10000)
@@ -17,11 +20,12 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(API_TOKEN)
 dp = Dispatcher()
 
-@dp.message(commands=["start"])
+# ========= BOT HANDLER =========
+@dp.message(Command("start"))
 async def start(msg: types.Message):
     await msg.answer("✅ BOT IS WORKING")
 
-# ---- HTTP ----
+# ========= HTTP =========
 async def health(request):
     return web.Response(text="OK")
 
