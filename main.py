@@ -15,10 +15,9 @@ API_TOKEN = os.getenv("API_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 CHANNEL_USERNAME = "p2p_LRN"
 
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") # مثال: https://your-app.onrender.com
-WEBHOOK_PATH = "/telegram"
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", 10000))
+GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"
 
 # إعداد Groq
 client = Groq(api_key=GROQ_API_KEY)
