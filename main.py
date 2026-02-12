@@ -2,6 +2,7 @@ import os
 import time
 import asyncio
 import aiohttp
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,20 +17,26 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from psycopg2 import pool
 
+# إعداد السجلات (Logs) لمراقبة الأخطاء
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CMC_KEY = os.getenv("CMC_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-# تأكد أن الرابط يبدأ بـ https ولا ينتهي بـ /
-RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") 
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") # يجب أن يكون: https://your-name.onrender.com
 
 POINTS_PER_USDT = 1000
 MIN_WITHDRAW_USDT = 10
 MIN_WITHDRAW_POINTS = MIN_WITHDRAW_USDT * POINTS_PER_USDT
 
 # ================= DATABASE =================
-db_pool = pool.SimpleConnectionPool(1, 20, DATABASE_URL)
+try:
+    db_pool = pool.SimpleConnectionPool(1, 20, DATABASE_URL)
+except Exception as e:
+    logger.error(f"❌ فشل الاتصال بقاعدة البيانات: {e}")
 
 def db_query(query, params=(), fetch=False):
     conn = db_pool.getconn()
@@ -40,6 +47,9 @@ def db_query(query, params=(), fetch=False):
         conn.commit()
         cur.close()
         return result
+    except Exception as e:
+        logger.error(f"❌ خطأ في الاستعلام: {e}")
+        return None
     finally:
         db_pool.putconn(conn)
 
@@ -92,7 +102,8 @@ async def get_btc(symbol="BTC"):
                 btc_cache["price"] = price
                 btc_cache["time"] = now
                 return price
-    except:
+    except Exception as e:
+        logger.error(f"❌ خطأ في جلب السعر: {e}")
         return 60000.0
 
 # ================= TEXTS =================
@@ -142,9 +153,11 @@ STRINGS = {
 # ================= MENU =================
 def main_menu(user):
     uid, points, trades, wins, wallet, active, lang = user
-    txt = STRINGS[lang]
+    # التأكد من وجود لغة مختارة
+    current_lang = lang if lang in STRINGS else "en"
+    txt = STRINGS[current_lang]
     usdt = points / POINTS_PER_USDT
-    wallet_display = wallet if wallet else ("Not Set" if lang=="en" else "غير محدد")
+    wallet_display = wallet if wallet else ("Not Set" if current_lang=="en" else "غير محدد")
     text = txt["dashboard"].format(points, usdt, trades, wins, wallet_display)
     keyboard = [
         [InlineKeyboardButton(txt["trade"], callback_data="trade")],
@@ -162,36 +175,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
     uid = q.from_user.id
-    user = get_user(uid)
     data = q.data
+    
+    # أهم خطوة: الرد على الـ callback لإنهاء علامة التحميل في الزر
+    await q.answer()
+    
+    user = get_user(uid)
 
     if data.startswith("lang_"):
-        lang = data.split("_")[1]
-        db_query("UPDATE users SET lang=%s WHERE user_id=%s", (lang, uid))
+        lang_code = data.split("_")[1]
+        db_query("UPDATE users SET lang=%s WHERE user_id=%s", (lang_code, uid))
         user = get_user(uid)
         text, kb = main_menu(user)
-        await q.edit_message_text(STRINGS[lang]["welcome"], parse_mode=ParseMode.HTML)
+        await q.edit_message_text(STRINGS[lang_code]["welcome"], parse_mode=ParseMode.HTML)
         await q.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
-    lang = user[6] or "en"
+    lang = user[6] if user[6] else "en"
     txt = STRINGS[lang]
 
-    if data=="change_lang":
+    if data == "change_lang":
         kb = [[InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
                InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")]]
         await q.edit_message_text(txt["choose_lang"], reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    if data=="set_wallet":
-        context.user_data["await_wallet"]=True
+    if data == "set_wallet":
+        context.user_data["await_wallet"] = True
         await q.message.reply_text(txt["send_wallet"])
         return
 
-    if data=="withdraw":
-        if user[1]<MIN_WITHDRAW_POINTS:
+    if data == "withdraw":
+        if user[1] < MIN_WITHDRAW_POINTS:
             await q.message.reply_text(txt["withdraw_min"])
             return
         if not user[4]:
@@ -201,29 +217,27 @@ async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_query("INSERT INTO withdrawals (user_id,wallet,amount_usdt) VALUES (%s,%s,%s)",(uid,user[4],amount))
         db_query("UPDATE users SET points=0 WHERE user_id=%s",(uid,))
         if ADMIN_ID:
-            try:
-                await context.bot.send_message(ADMIN_ID, f"💸 Withdrawal\nUser: {uid}\nWallet: {user[4]}\nAmount: {amount} USDT")
+            try: await context.bot.send_message(ADMIN_ID, f"💸 سحب جديد:\nالمستخدم: {uid}\nالمحفظة: {user[4]}\nالمبلغ: {amount} USDT")
             except: pass
         await q.message.reply_text(txt["withdraw_sent"])
         return
 
-    if data=="trade":
+    if data == "trade":
         if user[5]:
             await q.message.reply_text(txt["active_trade"])
             return
-        if user[1]<100:
+        if user[1] < 100:
             await q.message.reply_text(txt["low_points"])
             return
         price = await get_btc()
         db_query("UPDATE users SET points=points-100,trades=trades+1,active_trade=TRUE WHERE user_id=%s",(uid,))
         await q.edit_message_text(txt["monitor"].format(price))
-        context.job_queue.run_once(finish_trade, 60, data={"uid":uid,"start":price,"message":q.message})
+        context.job_queue.run_once(finish_trade, 60, data={"uid":uid,"start":price,"message_id":q.message.message_id, "chat_id": q.message.chat_id})
 
 async def finish_trade(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     uid = job.data["uid"]
     start_p = job.data["start"]
-    message = job.data["message"]
     end_p = await get_btc()
     
     win = end_p > start_p
@@ -232,11 +246,19 @@ async def finish_trade(context: ContextTypes.DEFAULT_TYPE):
     db_query("UPDATE users SET active_trade=FALSE WHERE user_id=%s",(uid,))
     
     status = "✅ WIN!" if win else "❌ LOSS"
-    await message.edit_text(f"{status}\nPrice: {end_p}")
+    # تعديل الرسالة القديمة
+    try:
+        await context.bot.edit_message_text(
+            chat_id=job.data["chat_id"],
+            message_id=job.data["message_id"],
+            text=f"{status}\nEntry: ${start_p}\nExit: ${end_p}"
+        )
+    except: pass
+    
     await asyncio.sleep(2)
     user = get_user(uid)
     text, kb = main_menu(user)
-    await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await context.bot.send_message(chat_id=job.data["chat_id"], text=text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("await_wallet"):
@@ -248,24 +270,23 @@ async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["await_wallet"] = False
         await update.message.reply_text("✅ Wallet saved!")
 
-# ================= TELEGRAM APP SETUP =================
+# ================= TELEGRAM SETUP =================
 ptb_app = Application.builder().token(TOKEN).build()
 ptb_app.add_handler(CommandHandler("start", start))
 ptb_app.add_handler(CallbackQueryHandler(handle_cb))
 ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet))
 
-# ================= FASTAPI & LIFESPAN =================
+# ================= FASTAPI LIFESPAN =================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # تشغيل البوت عند بدء السيرفر
     init_db()
     await ptb_app.initialize()
     await ptb_app.start()
+    # تأكد من أن الرابط صحيح في إعدادات Render
     webhook_url = f"{RENDER_URL}/{TOKEN}"
     await ptb_app.bot.set_webhook(webhook_url)
-    print(f"WEBHOOK SET: {webhook_url}")
+    logger.info(f"🚀 Webhook set to: {webhook_url}")
     yield
-    # إيقاف البوت عند إغلاق السيرفر
     await ptb_app.stop()
     await ptb_app.shutdown()
 
@@ -273,14 +294,17 @@ api = FastAPI(lifespan=lifespan)
 
 @api.post(f"/{TOKEN}")
 async def webhook_handler(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, ptb_app.bot)
-    await ptb_app.process_update(update)
+    try:
+        data = await request.json()
+        update = Update.de_json(data, ptb_app.bot)
+        await ptb_app.process_update(update)
+    except Exception as e:
+        logger.error(f"❌ Webhook error: {e}")
     return {"status": "ok"}
 
 @api.get("/")
 async def home():
-    return {"status": "Bot is active"}
+    return {"status": "Bot is online"}
 
 if __name__ == "__main__":
     import uvicorn
