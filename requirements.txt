@@ -3,3 +3,4 @@ requests
 python-dotenv
 flask[async]
 asgiref
+psycopg2-binary
