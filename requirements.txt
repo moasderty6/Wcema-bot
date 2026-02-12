@@ -1,4 +1,5 @@
 python-telegram-bot
 requests
 python-dotenv
-flask
+flask[async]
+asgiref
