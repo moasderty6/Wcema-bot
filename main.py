@@ -2,7 +2,7 @@ import os
 import asyncio
 import requests
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2 import pool
 from flask import Flask, request
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -11,162 +11,136 @@ from telegram.constants import ParseMode
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
-DATABASE_URL = "postgresql://neondb_owner:npg_txJFdgkvBH35@ep-icy-forest-aia1n447-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require"
-CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
+# استخدام رابط الـ Pooler من Neon لأداء أسرع
+DB_URI = "postgresql://neondb_owner:npg_txJFdgkvBH35@ep-icy-forest-aia1n447-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require"
+CMC_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
 
 app = Flask(__name__)
 
-# --- وظائف قاعدة البيانات ---
+# إنشاء مجمع اتصالات (مفتوح دائماً للسرعة)
+try:
+    db_pool = psycopg2.pool.SimpleConnectionPool(1, 20, DB_URI)
+except Exception as e:
+    print(f"DB Pool Error: {e}")
+
+def run_query(query, params=(), fetch=False):
+    conn = db_pool.getconn()
+    conn.autocommit = True # للحفظ الفوري للبيانات
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            if fetch: return cur.fetchone()
+    finally:
+        db_pool.putconn(conn)
+
 def init_db():
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            points INTEGER DEFAULT 1000,
-            lang TEXT,
-            total_trades INTEGER DEFAULT 0,
-            wins INTEGER DEFAULT 0
-        )
-    ''')
-    conn.commit()
-    cur.close()
-    conn.close()
+    run_query('''CREATE TABLE IF NOT EXISTS users (
+        user_id BIGINT PRIMARY KEY, points INT DEFAULT 1000, 
+        lang TEXT, trades INT DEFAULT 0, wins INT DEFAULT 0)''')
 
-def get_user(user_id):
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
-    user = cur.fetchone()
+def get_user_data(uid):
+    user = run_query("SELECT * FROM users WHERE user_id = %s", (uid,), fetch=True)
     if not user:
-        cur.execute("INSERT INTO users (user_id) VALUES (%s) RETURNING *", (user_id,))
-        user = cur.fetchone()
-        conn.commit()
-    cur.close()
-    conn.close()
-    return user
+        run_query("INSERT INTO users (user_id) VALUES (%s)", (uid,))
+        return {"user_id": uid, "points": 1000, "lang": None, "trades": 0, "wins": 0}
+    return {"user_id": user[0], "points": user[1], "lang": user[2], "trades": user[3], "wins": user[4]}
 
-def update_user(user_id, points=None, lang=None, win=False, trade=False):
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    if lang:
-        cur.execute("UPDATE users SET lang = %s WHERE user_id = %s", (lang, user_id))
-    if points is not None:
-        cur.execute("UPDATE users SET points = %s WHERE user_id = %s", (points, user_id))
-    if trade:
-        cur.execute("UPDATE users SET total_trades = total_trades + 1 WHERE user_id = %s", (user_id,))
-    if win:
-        cur.execute("UPDATE users SET wins = wins + 1 WHERE user_id = %s", (user_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# --- نصوص البوت ---
+# نصوص منسقة
 STRINGS = {
     "ar": {
-        "welcome": "<b>🌟 Moonbix Pro | Neon DB</b>\n\n🎯 <b>رصيدك:</b> <code>{points}</code>\n📊 <b>الصفقات:</b> <code>{total}</code>\n🏆 <b>الفوز:</b> <code>{wins}</code>",
-        "trade_up": "🚀 صعود", "trade_down": "📉 هبوط", "balance_btn": "💰 الرصيد", "lang_btn": "🇺🇸 English",
-        "recording": "<b>⌛️ جاري المراقبة...</b>\n🔹 <b>السعر:</b> <code>${price}</code>",
-        "win": "<b>✅ ربح! (+150)</b>\n💰 السعر: <code>${price}</code>",
-        "loss": "<b>❌ خسارة! (-100)</b>\n🔻 السعر: <code>${price}</code>",
-        "up": "صعود 🟢", "down": "هبوط 🔴"
+        "menu": "<b>💎 لوحة التحكم | Moonbix</b>\n\n💰 الرصيد: <code>{p}</code>\n📊 الصفقات: <code>{t}</code>\n🏆 الفوز: <code>{w}</code>",
+        "up": "🚀 صعود", "down": "📉 هبوط", "bal": "💰 الرصيد", "lng": "🇺🇸 English",
+        "wait": "<b>⌛️ جاري المراقبة...</b>\n💰 السعر الحالي: <code>${pr}</code>",
+        "win": "<b>✅ فوز! (+150)</b>\nالسعر: <code>${pr}</code>",
+        "loss": "<b>❌ خسارة! (-100)</b>\nالسعر: <code>${pr}</code>"
     },
     "en": {
-        "welcome": "<b>🌟 Moonbix Pro | Neon DB</b>\n\n🎯 <b>Balance:</b> <code>{points}</code>\n📊 <b>Trades:</b> <code>{total}</code>\n🏆 <b>Wins:</b> <code>{wins}</code>",
-        "trade_up": "🚀 Long", "trade_down": "📉 Short", "balance_btn": "💰 Balance", "lang_btn": "🇸🇦 العربية",
-        "recording": "<b>⌛️ Monitoring...</b>\n🔹 <b>Entry:</b> <code>${price}</code>",
-        "win": "<b>✅ Win! (+150)</b>\n💰 Price: <code>${price}</code>",
-        "loss": "<b>❌ Loss! (-100)</b>\n🔻 Price: <code>${price}</code>",
-        "up": "UP 🟢", "down": "DOWN 🔴"
+        "menu": "<b>💎 Dashboard | Moonbix</b>\n\n💰 Balance: <code>{p}</code>\n📊 Trades: <code>{t}</code>\n🏆 Wins: <code>{w}</code>",
+        "up": "🚀 Up", "down": "📉 Down", "bal": "💰 Balance", "lng": "🇸🇦 العربية",
+        "wait": "<b>⌛️ Monitoring...</b>\n💰 Current: <code>${pr}</code>",
+        "win": "<b>✅ Win! (+150)</b>\nPrice: <code>${pr}</code>",
+        "loss": "<b>❌ Loss! (-100)</b>\nPrice: <code>${pr}</code>"
     }
 }
 
-# --- منطق السعر والبوت ---
 ptb_app = Application.builder().token(TOKEN).build()
 
-def get_btc_price():
+def get_btc():
     try:
         url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        headers = {'X-CMC_PRO_API_KEY': CMC_API_KEY}
-        res = requests.get(url, headers=headers, params={'symbol': 'BTC', 'convert': 'USDT'}).json()
-        return round(float(res['data']['BTC']['quote']['USDT']['price']), 2)
+        r = requests.get(url, headers={'X-CMC_PRO_API_KEY': CMC_KEY}, params={'symbol': 'BTC', 'convert': 'USDT'}, timeout=5).json()
+        return round(float(r['data']['BTC']['quote']['USDT']['price']), 2)
     except: return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_user(update.effective_user.id)
+    uid = update.effective_user.id
+    user = get_user_data(uid)
     if not user['lang']:
-        kb = [[InlineKeyboardButton("العربية 🇸🇦", callback_data='set_lang_ar')],
-              [InlineKeyboardButton("English 🇺🇸", callback_data='set_lang_en')]]
+        kb = [[InlineKeyboardButton("العربية 🇸🇦", callback_data='lang_ar')], [InlineKeyboardButton("English 🇺🇸", callback_data='lang_en')]]
         await update.message.reply_text("<b>Choose Language</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
-    else:
-        await show_main_menu(update, user['user_id'])
+    else: await show_menu(update, uid)
 
-async def show_main_menu(update_or_query, user_id):
-    user = get_user(user_id)
-    lang = user['lang'] or "en"
-    text = STRINGS[lang]["welcome"].format(points=user['points'], total=user['total_trades'], wins=user['wins'])
-    kb = [[InlineKeyboardButton(STRINGS[lang]["trade_up"], callback_data='trade_up'),
-           InlineKeyboardButton(STRINGS[lang]["trade_down"], callback_data='trade_down')],
-          [InlineKeyboardButton(STRINGS[lang]["balance_btn"], callback_data='balance')],
-          [InlineKeyboardButton(STRINGS[lang]["lang_btn"], callback_data='change_lang')]]
+async def show_menu(upd, uid):
+    user = get_user_data(uid)
+    l = user['lang'] or "en"
+    txt = STRINGS[l]["menu"].format(p=user['points'], t=user['trades'], w=user['wins'])
+    kb = [[InlineKeyboardButton(STRINGS[l]["up"], callback_data='t_up'), InlineKeyboardButton(STRINGS[l]["down"], callback_data='t_down')],
+          [InlineKeyboardButton(STRINGS[l]["bal"], callback_data='b'), InlineKeyboardButton(STRINGS[l]["lng"], callback_data='c_l')]]
+    if isinstance(upd, Update): await upd.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    else: await upd.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+
+async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer() # استجابة فورية للزر لمنع التعليق
+    uid = query.from_user.id
+    user = get_user_data(uid)
+    data = query.data
+
+    if data.startswith("lang_"):
+        run_query("UPDATE users SET lang = %s WHERE user_id = %s", (data.split("_")[1], uid))
+        await show_menu(query, uid); return
     
-    if isinstance(update_or_query, Update):
-        await update_or_query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
-    else:
-        await update_or_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    if data == "c_l":
+        run_query("UPDATE users SET lang = %s WHERE user_id = %s", ("en" if user['lang'] == "ar" else "ar", uid))
+        await show_menu(query, uid); return
 
-async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer(); user_id = query.from_user.id; data = query.data
-    user = get_user(user_id)
-
-    if data.startswith("set_lang_"):
-        update_user(user_id, lang=data.split("_")[2])
-        await show_main_menu(query, user_id); return
+    l = user['lang'] or "en"
+    if data.startswith("t_"):
+        if user['points'] < 100: await query.message.reply_text("❌ No Points!"); return
+        
+        pr_start = get_btc()
+        run_query("UPDATE users SET points = points - 100, trades = trades + 1 WHERE user_id = %s", (uid,))
+        await query.edit_message_text(STRINGS[l]["wait"].format(pr=f"{pr_start:,}"), parse_mode=ParseMode.HTML)
+        
+        await asyncio.sleep(15) # تقليل الوقت للتجربة السريعة (يمكنك اعادتها لـ 60)
+        
+        pr_end = get_btc()
+        is_win = (data == "t_up" and pr_end > pr_start) or (data == "t_down" and pr_end < pr_start)
+        if is_win: run_query("UPDATE users SET points = points + 250, wins = wins + 1 WHERE user_id = %s", (uid,))
+        
+        res = STRINGS[l]["win" if is_win else "loss"].format(pr=f"{pr_end:,}")
+        await query.edit_message_text(res, parse_mode=ParseMode.HTML)
+        await asyncio.sleep(3); await show_menu(query, uid)
     
-    if data == "change_lang":
-        new_lang = "en" if user['lang'] == "ar" else "ar"
-        update_user(user_id, lang=new_lang)
-        await show_main_menu(query, user_id); return
-
-    lang = user['lang'] or "en"
-
-    if data.startswith("trade_"):
-        if user['points'] < 100:
-            await query.edit_message_text("❌ Not enough points!"); return
-        
-        price_start = get_btc_price()
-        update_user(user_id, points=user['points']-100, trade=True)
-        await query.edit_message_text(STRINGS[lang]["recording"].format(price=f"{price_start:,}"), parse_mode=ParseMode.HTML)
-        
-        await asyncio.sleep(60)
-        
-        price_end = get_btc_price()
-        win = (data == "trade_up" and price_end > price_start) or (data == "trade_down" and price_end < price_start)
-        
-        new_balance = user['points'] - 100 + (250 if win else 0)
-        update_user(user_id, points=new_balance, win=win)
-        
-        res_text = STRINGS[lang]["win" if win else "loss"].format(price=f"{price_end:,}")
-        await query.edit_message_text(f"{res_text}\n\n🎯 Balance: {new_balance}", parse_mode=ParseMode.HTML)
-        await asyncio.sleep(4); await show_main_menu(query, user_id)
+    elif data == "b": await query.answer(f"Balance: {user['points']}", show_alert=True)
 
 ptb_app.add_handler(CommandHandler("start", start))
-ptb_app.add_handler(CallbackQueryHandler(handle_callbacks))
+ptb_app.add_handler(CallbackQueryHandler(handle_cb))
 
 @app.post(f"/{TOKEN}")
 async def respond():
     update = Update.de_json(request.get_json(force=True), ptb_app.bot)
-    await ptb_app.process_update(update)
-    return "ok"
+    # تشغيل المعالجة في الخلفية لضمان سرعة رد الويب هوك
+    asyncio.create_task(ptb_app.process_update(update))
+    return "ok", 200
 
-async def init_bot():
-    init_db() # إنشاء الجدول في Neon
+async def init():
+    init_db()
     await ptb_app.initialize()
     await ptb_app.start()
-    await ptb_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/{TOKEN}")
+    await ptb_app.bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(init_bot())
+    loop.run_until_complete(init())
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
