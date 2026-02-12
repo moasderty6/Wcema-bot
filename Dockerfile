@@ -1,30 +1,18 @@
-# ---------- Base Image ----------
+# استخدم Python 3.11
 FROM python:3.11-slim
 
-# ---------- Environment ----------
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# ---------- Work Directory ----------
+# تعيين مجلد العمل
 WORKDIR /app
 
-# ---------- System Dependencies ----------
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libpq-dev \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+# نسخ ملفات المشروع
+COPY . /app
 
-# ---------- Install Python Dependencies ----------
-COPY requirements.txt .
+# تحديث pip وتثبيت المتطلبات
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# ---------- Copy Project ----------
-COPY . .
+# تعيين متغير البيئة للـ Port
+ENV PORT=10000
 
-# ---------- Expose Port ----------
-EXPOSE 10000
-
-# ---------- Start Command ----------
-CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:10000", "--workers", "1", "--threads", "8"]
+# أمر التشغيل
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
