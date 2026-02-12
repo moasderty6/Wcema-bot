@@ -1,5 +1,4 @@
 import os
-import asyncio
 import time
 import aiohttp
 import psycopg2
@@ -150,7 +149,6 @@ def main_menu(user):
     usdt = points/POINTS_PER_USDT
     wallet_display = wallet if wallet else ("Not Set" if lang=="en" else "غير محدد")
     text = txt["dashboard"].format(points, usdt, trades, wins, wallet_display)
-
     keyboard = [
         [InlineKeyboardButton(txt["trade"], callback_data="trade")],
         [InlineKeyboardButton(txt["wallet"], callback_data="set_wallet"),
@@ -159,7 +157,7 @@ def main_menu(user):
     ]
     return text, InlineKeyboardMarkup(keyboard)
 
-# ================= HANDLERS =================
+# ================= TELEGRAM HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
@@ -174,32 +172,33 @@ async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(uid)
     data = q.data
 
-    # Language selection
+    # Language
     if data.startswith("lang_"):
         lang = data.split("_")[1]
-        db_query("UPDATE users SET lang=%s WHERE user_id=%s", (lang, uid))
+        db_query("UPDATE users SET lang=%s WHERE user_id=%s",(lang,uid))
         user = get_user(uid)
         text,kb = main_menu(user)
-        await q.edit_message_text(STRINGS[lang]["welcome"], parse_mode=ParseMode.HTML)
+        await q.edit_message_text(STRINGS[lang]["welcome"],parse_mode=ParseMode.HTML)
         await q.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
     lang = user[6] or "en"
     txt = STRINGS[lang]
 
+    # Change language
     if data=="change_lang":
-        kb = [
-            [InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
-             InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")]
-        ]
+        kb = [[InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
+               InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")]]
         await q.edit_message_text(txt["choose_lang"], reply_markup=InlineKeyboardMarkup(kb))
         return
 
+    # Wallet
     if data=="set_wallet":
         context.user_data["await_wallet"]=True
         await q.message.reply_text(txt["send_wallet"])
         return
 
+    # Withdraw
     if data=="withdraw":
         if user[1]<MIN_WITHDRAW_POINTS:
             await q.message.reply_text(txt["withdraw_min"])
@@ -208,12 +207,13 @@ async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text(txt["withdraw_no_wallet"])
             return
         amount = user[1]/POINTS_PER_USDT
-        db_query("INSERT INTO withdrawals (user_id,wallet,amount_usdt) VALUES (%s,%s,%s)",(uid,user[4],amount))
+        db_query("INSERT INTO withdrawals(user_id,wallet,amount_usdt) VALUES(%s,%s,%s)",(uid,user[4],amount))
         db_query("UPDATE users SET points=0 WHERE user_id=%s",(uid,))
         await context.bot.send_message(ADMIN_ID,f"💸 Withdrawal\nUser: {uid}\nWallet: {user[4]}\nAmount: {amount} USDT")
         await q.message.reply_text(txt["withdraw_sent"])
         return
 
+    # Trade
     if data=="trade":
         if user[5]:
             await q.message.reply_text(txt["active_trade"])
@@ -230,21 +230,16 @@ async def finish_trade(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     uid = job.data["uid"]
     start = job.data["start"]
-    direction = job.data["direction"]
     message = job.data["message"]
-
     end = await get_price()
-    win = (direction=="up" and end>start) or (direction=="down" and end<start)
-
+    win = end>start
     if win:
         db_query("UPDATE users SET points=points+250,wins=wins+1 WHERE user_id=%s",(uid,))
     db_query("UPDATE users SET active_trade=FALSE WHERE user_id=%s",(uid,))
-
     await message.edit_text(f"{'✅ WIN!' if win else '❌ LOSS'}\nPrice: {end}")
-    await asyncio.sleep(3)
     user = get_user(uid)
     text,kb = main_menu(user)
-    await message.reply_text(text,reply_markup=kb,parse_mode=ParseMode.HTML)
+    await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("await_wallet"):
@@ -256,32 +251,30 @@ async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["await_wallet"]=False
         await update.message.reply_text(STRINGS["en"]["wallet_saved"])
 
-# ================= TELEGRAM INIT =================
+# ================= INIT BOT =================
 ptb_app = Application.builder().token(TOKEN).build()
-ptb_app.add_handler(CommandHandler("start", start))
+ptb_app.add_handler(CommandHandler("start",start))
 ptb_app.add_handler(CallbackQueryHandler(handle_cb))
 ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet))
 
-# ================= WEBHOOK =================
-@app.post(f"/{TOKEN}")
-async def webhook(req: Request):
-    data = await req.json()
-    update = Update.de_json(data, ptb_app.bot)
-    await ptb_app.process_update(update)
-    return "ok",200
-
-@app.get("/")
-async def home():
-    return "Bot Running",200
-
-# ================= START BOT =================
-async def init_bot():
+@app.on_event("startup")
+async def on_startup():
     init_db()
     await ptb_app.initialize()
     await ptb_app.start()
     await ptb_app.bot.set_webhook(f"{RENDER_URL}/{TOKEN}")
 
+@app.post(f"/{TOKEN}")
+async def webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, ptb_app.bot)
+    await ptb_app.process_update(update)
+    return "ok"
+
+@app.get("/")
+async def home():
+    return "Bot Running"
+
 if __name__=="__main__":
     import uvicorn
-    asyncio.run(init_bot())
-    uvicorn.run(app,host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
