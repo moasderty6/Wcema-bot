@@ -12,7 +12,7 @@ from aiogram.types import InlineKeyboardButton, Update
 from fastapi import FastAPI, Request
 import uvicorn
 
-# --- CONFIG ---
+# --- الإعدادات ---
 TOKEN = os.getenv("BOT_TOKEN")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -21,7 +21,7 @@ WEBHOOK_URL = f"{RENDER_URL}{WEBHOOK_PATH}"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- DB MANAGEMENT ---
+# --- قاعدة البيانات ---
 def init_db():
     conn = sqlite3.connect("data.db")
     cur = conn.cursor()
@@ -48,44 +48,45 @@ def sync_user(uid, username):
     conn.close()
     return user
 
-# --- PRICE UTILS ---
+# --- جلب سعر البيتكوين ---
 async def get_btc_price():
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
-            return float(r.json()['price'])
+            data = r.json()
+            return float(data['price'])
     except Exception as e:
         logger.error(f"Price error: {e}")
         return 0.0
 
-# --- BOT SETUP ---
+# --- إعداد البوت ---
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 def main_menu_kb():
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="📈 High", callback_data="trade_up"), 
-                InlineKeyboardButton(text="📉 Low", callback_data="trade_down"))
+    builder.row(InlineKeyboardButton(text="🚀 High (Buy)", callback_data="trade_up"), 
+                InlineKeyboardButton(text="🔻 Low (Sell)", callback_data="trade_down"))
     builder.row(InlineKeyboardButton(text="💳 Set Wallet", callback_data="set_wallet"))
     builder.row(InlineKeyboardButton(text="💸 Withdraw", callback_data="withdraw"))
-    builder.row(InlineKeyboardButton(text="🔄 Refresh Dashboard", callback_data="refresh"))
+    builder.row(InlineKeyboardButton(text="🔄 Refresh Status", callback_data="refresh"))
     return builder.as_markup()
 
 async def send_dashboard(message_or_call, user_id, username):
     user = sync_user(user_id, username)
     points = user[2]
     usdt = points / 1000
-    wallet = user[3] if user[3] else "Not Set"
+    wallet = user[3] if user[3] else "❌ Not Set"
     
     text = (
-        f"<b>💎 USER DASHBOARD</b>\n"
+        f"<b>💎 TRADING DASHBOARD</b>\n"
         f"━━━━━━━━━━━━━━\n"
         f"👤 <b>User:</b> {username}\n"
         f"💰 <b>Points:</b> <code>{points}</code>\n"
         f"💵 <b>Balance:</b> <code>{usdt:.2f} USDT</code>\n"
         f"🔗 <b>TRC20:</b> <code>{wallet}</code>\n"
         f"━━━━━━━━━━━━━━\n"
-        f"🎮 <b>Predict BTC price in 60s:</b>"
+        f"🎮 <b>Predict BTC/USDT price in 60s:</b>"
     )
     
     if isinstance(message_or_call, types.Message):
@@ -111,24 +112,25 @@ async def trade_handler(call: types.CallbackQuery):
     if user[2] < 100:
         return await call.answer("❌ Need at least 100 points!", show_alert=True)
     
-    prediction = call.data.split("_")[1] # up or down
+    prediction = call.data.split("_")[1]
     entry_price = await get_btc_price()
     
     if entry_price == 0:
-        return await call.answer("❌ Price API Error, try later")
+        return await call.answer("❌ Price API Timeout. Try again.")
 
-    # خصم النقاط فوراً
+    # خصم النقاط
     conn = sqlite3.connect("data.db")
     conn.execute("UPDATE users SET points = points - 100 WHERE id = ?", (user[0],))
     conn.commit()
 
     await call.message.edit_text(
-        f"✅ <b>Trade Active!</b>\n"
-        f"Type: {'🚀 High' if prediction == 'up' else '🔻 Low'}\n"
-        f"Entry: ${entry_price}\n"
-        f"⏳ Waiting 60 seconds...",
+        f"✅ <b>Trade Executed!</b>\n"
+        f"Direction: {'🚀 HIGH' if prediction == 'up' else '🔻 LOW'}\n"
+        f"Entry Price: ${entry_price}\n"
+        f"⏳ Processing results in 60s...",
         parse_mode="HTML"
     )
+    await call.answer()
     
     await asyncio.sleep(60)
     
@@ -137,55 +139,60 @@ async def trade_handler(call: types.CallbackQuery):
     if prediction == "up" and exit_price > entry_price: win = True
     elif prediction == "down" and exit_price < entry_price: win = True
     
-    reward = 200 if win else 0 # يرجع الـ 100 وفوقها 100 ربح
     if win:
-        conn.execute("UPDATE users SET points = points + ? WHERE id = ?", (reward, user[0]))
+        conn = sqlite3.connect("data.db")
+        conn.execute("UPDATE users SET points = points + 200 WHERE id = ?", (user[0],))
         conn.commit()
     
-    result_text = "🎉 <b>YOU WIN!</b>" if win else "💀 <b>YOU LOST!</b>"
+    result_emoji = "🎉" if win else "💀"
+    result_text = "YOU WIN!" if win else "YOU LOST!"
+    
     await call.message.answer(
-        f"{result_text}\n"
+        f"{result_emoji} <b>{result_text}</b>\n"
         f"━━━━━━━━━━━━━━\n"
         f"Entry: ${entry_price}\n"
         f"Exit: ${exit_price}\n"
-        f"Change: {exit_price - entry_price:.2f}$",
+        f"Net: {'+100' if win else '-100'} points",
         parse_mode="HTML"
     )
     await send_dashboard(call, call.from_user.id, call.from_user.full_name)
 
 @dp.callback_query(F.data == "set_wallet")
 async def set_wallet_call(call: types.CallbackQuery):
-    await call.message.answer("📩 Please send your <b>USDT TRC20</b> address:", parse_mode="HTML")
+    await call.message.answer("📩 Please send your <b>USDT TRC20</b> address:")
     await call.answer()
 
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_call(call: types.CallbackQuery):
     user = sync_user(call.from_user.id, call.from_user.full_name)
     if user[2] < 10000:
-        await call.answer("❌ Minimum withdrawal is 10,000 points (10 USDT)", show_alert=True)
+        await call.answer("❌ Min withdrawal: 10,000 pts ($10)", show_alert=True)
     elif not user[3]:
-        await call.answer("❌ Set your wallet address first!", show_alert=True)
+        await call.answer("❌ Set wallet first!", show_alert=True)
     else:
-        # هنا يمكنك إضافة كود لإرسال طلب السحب للآدمن
-        await call.message.answer(f"✅ Withdrawal request for {user[2]/1000:.2f} USDT sent to admin!")
+        await call.message.answer(f"✅ Request for {user[2]/1000:.2f} USDT sent to review.")
     await call.answer()
 
 @dp.message()
 async def text_handler(message: types.Message):
-    # تحقق بسيط إذا كان النص هو عنوان محفظة
-    if len(message.text) > 30 and message.text.startswith("T"):
+    if len(message.text) > 25 and message.text.startswith("T"):
         conn = sqlite3.connect("data.db")
         conn.execute("UPDATE users SET wallet = ? WHERE id = ?", (message.text, message.from_user.id))
         conn.commit()
-        await message.reply("✅ TRC20 Wallet Address Saved!")
+        await message.reply("✅ TRC20 Wallet Saved!")
         await send_dashboard(message, message.from_user.id, message.from_user.full_name)
 
-# --- FASTAPI SERVER ---
+# --- FastAPI & Webhook ---
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # تنظيف شامل للويب هوك القديم
     await bot.delete_webhook(drop_pending_updates=True)
-    await bot.set_webhook(url=WEBHOOK_URL)
+    await asyncio.sleep(1) # وقت مستقطع لضمان التنظيف
+    await bot.set_webhook(url=WEBHOOK_URL, allowed_updates=["message", "callback_query"])
+    logger.info(f"🚀 Webhook Set: {WEBHOOK_URL}")
     yield
     await bot.delete_webhook()
 
@@ -193,13 +200,17 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post(WEBHOOK_PATH)
 async def bot_webhook(request: Request):
-    update = Update.model_validate(await request.json(), context={"bot": bot})
-    await dp.feed_update(bot, update)
+    try:
+        data = await request.json()
+        update = Update.model_validate(data, context={"bot": bot})
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        logger.error(f"Webhook Error: {e}")
     return {"status": "ok"}
 
 @app.get("/")
 async def index():
-    return {"status": "Bot is active"}
+    return {"status": "Bot is alive and trading"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
