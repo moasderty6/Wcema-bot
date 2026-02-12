@@ -1,7 +1,6 @@
 import os
 import asyncio
 import time
-import threading
 import aiohttp
 from flask import Flask, request
 from psycopg2 import pool
@@ -81,7 +80,6 @@ async def get_btc(symbol="BTC"):
     now = time.time()
     if btc_cache["price"] and now - btc_cache["time"] < 10:
         return btc_cache["price"]
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -100,7 +98,7 @@ async def get_btc(symbol="BTC"):
 # ================= TEXTS =================
 STRINGS = {
     "en": {
-        "choose_lang": "🌍 Please choose your language:",
+        "choose_lang": "🌍 Choose your language:",
         "welcome": "<b>👋 Welcome!</b>",
         "dashboard": "<b>💎 Dashboard</b>\n\n💰 Points: <code>{}</code>\n💵 USDT: <code>{:.2f}</code>\n📊 Trades: <code>{}</code>\n🏆 Wins: <code>{}</code>\n🔗 Wallet: <code>{}</code>",
         "trade": "🎲 Start Trade",
@@ -156,7 +154,6 @@ def main_menu(user):
          InlineKeyboardButton(txt["withdraw"], callback_data="withdraw")],
         [InlineKeyboardButton(txt["lang_btn"], callback_data="change_lang")]
     ]
-
     return text, InlineKeyboardMarkup(keyboard)
 
 # ================= HANDLERS =================
@@ -184,7 +181,7 @@ async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
-    lang = user[6]
+    lang = user[6] or "en"
     txt = STRINGS[lang]
 
     # Change language
@@ -268,28 +265,25 @@ ptb_app.add_handler(CommandHandler("start", start))
 ptb_app.add_handler(CallbackQueryHandler(handle_cb))
 ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet))
 
-# ================= WEBHOOK =================
-import concurrent.futures
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
-
+# ================= ASYNC WEBHOOK =================
 @app.post(f"/{TOKEN}")
-def webhook():
-    update = Update.de_json(request.get_json(force=True), ptb_app.bot)
-    executor.submit(lambda: asyncio.run(ptb_app.process_update(update)))
+async def webhook():
+    update = Update.de_json(await request.get_json(force=True), ptb_app.bot)
+    await ptb_app.process_update(update)
     return "ok",200
 
 @app.route("/")
-def home():
+async def home():
     return "Bot Running",200
 
-# ================= START THREAD =================
+# ================= START BOT =================
 async def init_bot():
     init_db()
     await ptb_app.initialize()
     await ptb_app.start()
     await ptb_app.bot.set_webhook(f"{RENDER_URL}/{TOKEN}")
 
-def start_bot():
+if __name__ == "__main__":
+    import uvicorn
     asyncio.run(init_bot())
-
-threading.Thread(target=start_bot).start()
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
