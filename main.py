@@ -14,6 +14,7 @@ from telegram.ext import (
     filters,
 )
 from telegram.constants import ParseMode
+import threading
 
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
@@ -75,7 +76,6 @@ def get_user(uid):
 
 # ================= BTC PRICE =================
 btc_cache = {"price": None, "time": 0}
-
 async def get_btc(symbol="BTC"):
     now = time.time()
     if btc_cache["price"] and now - btc_cache["time"] < 10:
@@ -96,48 +96,7 @@ async def get_btc(symbol="BTC"):
         return 60000.0
 
 # ================= TEXTS =================
-STRINGS = {
-    "en": {
-        "choose_lang": "🌍 Choose your language:",
-        "welcome": "<b>👋 Welcome!</b>",
-        "dashboard": "<b>💎 Dashboard</b>\n\n💰 Points: <code>{}</code>\n💵 USDT: <code>{:.2f}</code>\n📊 Trades: <code>{}</code>\n🏆 Wins: <code>{}</code>\n🔗 Wallet: <code>{}</code>",
-        "trade": "🎲 Start Trade",
-        "wallet": "💳 Set Wallet",
-        "withdraw": "💸 Withdraw",
-        "active_trade": "⚠️ You have an active trade!",
-        "low_points": "❌ Not enough points!",
-        "monitor": "⏳ Trade Active...\nEntry Price: ${}\nDuration: 60s",
-        "win": "✅ WIN!\nPrice: ${}\n+250 Points",
-        "loss": "❌ LOSS\nPrice: ${}\n-100 Points",
-        "send_wallet": "📌 Send your USDT TRC20 wallet:",
-        "wallet_saved": "✅ Wallet saved!",
-        "invalid_wallet": "❌ Invalid TRC20 address",
-        "withdraw_min": "⚠️ Minimum 10 USDT",
-        "withdraw_no_wallet": "⚠️ Set wallet first",
-        "withdraw_sent": "✅ Withdrawal request sent",
-        "lang_btn": "🌐 Change Language",
-    },
-    "ar": {
-        "choose_lang": "🌍 اختر لغتك:",
-        "welcome": "<b>👋 أهلاً بك!</b>",
-        "dashboard": "<b>💎 لوحة التحكم</b>\n\n💰 النقاط: <code>{}</code>\n💵 دولار: <code>{:.2f}</code>\n📊 الصفقات: <code>{}</code>\n🏆 الفوز: <code>{}</code>\n🔗 المحفظة: <code>{}</code>",
-        "trade": "🎲 بدء المراهنة",
-        "wallet": "💳 تعيين المحفظة",
-        "withdraw": "💸 سحب",
-        "active_trade": "⚠️ لديك صفقة مفتوحة!",
-        "low_points": "❌ نقاط غير كافية!",
-        "monitor": "⏳ جارٍ المراقبة...\nسعر الدخول: ${}\nالمدة: 60 ثانية",
-        "win": "✅ ربح!\nالسعر: ${}\n+250 نقاط",
-        "loss": "❌ خسارة\nالسعر: ${}\n-100 نقاط",
-        "send_wallet": "📌 أرسل عنوان محفظتك USDT TRC20:",
-        "wallet_saved": "✅ تم حفظ المحفظة!",
-        "invalid_wallet": "❌ عنوان غير صالح",
-        "withdraw_min": "⚠️ الحد الأدنى 10 دولار",
-        "withdraw_no_wallet": "⚠️ عيّن المحفظة أولاً",
-        "withdraw_sent": "✅ تم إرسال طلب السحب",
-        "lang_btn": "🌐 تغيير اللغة",
-    }
-}
+STRINGS = { ... }  # ابقي النصوص كما هي بدون تغيير
 
 # ================= MENU =================
 def main_menu(user):
@@ -147,7 +106,6 @@ def main_menu(user):
     wallet_display = wallet if wallet else ("Not Set" if lang=="en" else "غير محدد")
 
     text = txt["dashboard"].format(points, usdt, trades, wins, wallet_display)
-
     keyboard = [
         [InlineKeyboardButton(txt["trade"], callback_data="trade")],
         [InlineKeyboardButton(txt["wallet"], callback_data="set_wallet"),
@@ -158,10 +116,8 @@ def main_menu(user):
 
 # ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [
-        [InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
-         InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")]
-    ]
+    kb = [[InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
+           InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")]]
     await update.message.reply_text("🌍 Choose your language / اختر اللغة:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -181,73 +137,8 @@ async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
-    lang = user[6] or "en"
-    txt = STRINGS[lang]
-
-    # Change language
-    if data=="change_lang":
-        kb = [
-            [InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
-             InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")]
-        ]
-        await q.edit_message_text(txt["choose_lang"], reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    # Set wallet
-    if data=="set_wallet":
-        context.user_data["await_wallet"] = True
-        await q.message.reply_text(txt["send_wallet"])
-        return
-
-    # Withdraw
-    if data=="withdraw":
-        if user[1] < MIN_WITHDRAW_POINTS:
-            await q.message.reply_text(txt["withdraw_min"])
-            return
-        if not user[4]:
-            await q.message.reply_text(txt["withdraw_no_wallet"])
-            return
-        amount = user[1]/POINTS_PER_USDT
-        db_query("INSERT INTO withdrawals (user_id,wallet,amount_usdt) VALUES (%s,%s,%s)", (uid,user[4],amount))
-        db_query("UPDATE users SET points=0 WHERE user_id=%s",(uid,))
-        await context.bot.send_message(ADMIN_ID,f"💸 Withdrawal\nUser: {uid}\nWallet: {user[4]}\nAmount: {amount} USDT")
-        await q.message.reply_text(txt["withdraw_sent"])
-        return
-
-    # Trade
-    if data=="trade":
-        if user[5]:
-            await q.message.reply_text(txt["active_trade"])
-            return
-        if user[1]<100:
-            await q.message.reply_text(txt["low_points"])
-            return
-
-        price = await get_btc()
-        db_query("UPDATE users SET points=points-100,trades=trades+1,active_trade=TRUE WHERE user_id=%s",(uid,))
-        await q.edit_message_text(txt["monitor"].format(price))
-
-        context.job_queue.run_once(finish_trade,60,data={"uid":uid,"start":price,"direction":"up","message":q.message})
-
-async def finish_trade(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    uid = job.data["uid"]
-    start = job.data["start"]
-    direction = job.data["direction"]
-    message = job.data["message"]
-
-    end = await get_btc()
-    win = (direction=="up" and end>start) or (direction=="down" and end<start)
-
-    if win:
-        db_query("UPDATE users SET points=points+250,wins=wins+1 WHERE user_id=%s",(uid,))
-    db_query("UPDATE users SET active_trade=FALSE WHERE user_id=%s",(uid,))
-
-    await message.edit_text(f"{'✅ WIN!' if win else '❌ LOSS'}\nPrice: {end}")
-    await asyncio.sleep(3)
-    user = get_user(uid)
-    text,kb = main_menu(user)
-    await message.reply_text(text,reply_markup=kb,parse_mode=ParseMode.HTML)
+    # باقي اللوجيك: change_lang, set_wallet, withdraw, trade
+    ...
 
 async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("await_wallet"):
@@ -259,31 +150,32 @@ async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["await_wallet"]=False
         await update.message.reply_text(STRINGS["en"]["wallet_saved"])
 
-# ================= TELEGRAM INIT =================
+# ================= TELEGRAM BOT =================
 ptb_app = Application.builder().token(TOKEN).build()
 ptb_app.add_handler(CommandHandler("start", start))
 ptb_app.add_handler(CallbackQueryHandler(handle_cb))
 ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet))
 
-# ================= ASYNC WEBHOOK =================
+# ================= WEBHOOK =================
 @app.post(f"/{TOKEN}")
 async def webhook():
-    update = Update.de_json(await request.get_json(force=True), ptb_app.bot)
+    data = await request.json()
+    update = Update.de_json(data, ptb_app.bot)
     await ptb_app.process_update(update)
-    return "ok",200
+    return {"ok": True}
 
 @app.route("/")
-async def home():
-    return "Bot Running",200
+def home():
+    return "Bot Running", 200
 
 # ================= START BOT =================
-async def init_bot():
-    init_db()
-    await ptb_app.initialize()
-    await ptb_app.start()
-    await ptb_app.bot.set_webhook(f"{RENDER_URL}/{TOKEN}")
+def run_bot():
+    async def _run():
+        init_db()
+        await ptb_app.initialize()
+        await ptb_app.start()
+        await ptb_app.bot.set_webhook(f"{RENDER_URL}/{TOKEN}")
+    asyncio.run(_run())
 
-if __name__ == "__main__":
-    import uvicorn
-    asyncio.run(init_bot())
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+# تشغيل البوت في Thread لتجنب مشاكل Event Loop مع Flask
+threading.Thread(target=run_bot).start()
