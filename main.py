@@ -10,11 +10,11 @@ from telegram.constants import ParseMode
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3" # تم دمج المفتاح الخاص بك
 
 app = Flask(__name__)
 users_db = {}
 
-# نصوص منسقة بشكل احترافي
 STRINGS = {
     "ar": {
         "welcome": "<b>🌟 مرحباً بك في Moonbix Pro</b>\n\n🎯 <b>رصيدك:</b> <code>{points}</code> نقطة\n📊 <b>الصفقات:</b> <code>{total}</code>\n\n<i>توقع حركة BTC خلال 60 ثانية:</i>",
@@ -36,11 +36,22 @@ STRINGS = {
 
 ptb_app = Application.builder().token(TOKEN).build()
 
+# --- وظيفة جلب السعر باستخدام CMC ---
 def get_btc_price():
     try:
-        res = requests.get("https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT", timeout=5).json()
-        return float(res['result']['list'][0]['lastPrice'])
-    except: return None
+        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        parameters = {'symbol': 'BTC', 'convert': 'USDT'}
+        headers = {
+            'Accepts': 'application/json',
+            'X-CMC_PRO_API_KEY': CMC_API_KEY,
+        }
+        response = requests.get(url, headers=headers, params=parameters, timeout=10)
+        data = response.json()
+        price = data['data']['BTC']['quote']['USDT']['price']
+        return round(float(price), 2)
+    except Exception as e:
+        print(f"CMC API Error: {e}")
+        return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -85,7 +96,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         choice = data.split("_")[1]
         price_start = get_btc_price()
         if not price_start:
-            await query.edit_message_text("Error fetching price!"); return
+            await query.edit_message_text("❌ Error fetching CMC price. Check API key!"); return
 
         users_db[user_id]['points'] -= 100
         users_db[user_id]['total'] += 1
@@ -93,7 +104,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await query.edit_message_text(STRINGS[lang]["recording"].format(choice=choice_text, price=f"{price_start:,}"), parse_mode=ParseMode.HTML)
         
-        await asyncio.sleep(60) # دقيقة انتظار
+        await asyncio.sleep(60) # انتظار 60 ثانية
         
         price_end = get_btc_price()
         win = (choice == "up" and price_end > price_start) or (choice == "down" and price_end < price_start)
@@ -114,7 +125,7 @@ async def respond():
     return "ok"
 
 @app.route('/')
-def health(): return "Ready", 200
+def health(): return "CMC Edition Running", 200
 
 async def init_bot():
     await ptb_app.initialize()
