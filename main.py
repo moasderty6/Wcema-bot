@@ -8,7 +8,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
-    Callback_queryHandler,
+    CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
     filters,
@@ -21,7 +21,8 @@ TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CMC_KEY = os.getenv("CMC_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") # تأكد أنه يبدأ بـ https://
+# تأكد أن الرابط يبدأ بـ https ولا ينتهي بـ /
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") 
 
 POINTS_PER_USDT = 1000
 MIN_WITHDRAW_USDT = 10
@@ -200,7 +201,9 @@ async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_query("INSERT INTO withdrawals (user_id,wallet,amount_usdt) VALUES (%s,%s,%s)",(uid,user[4],amount))
         db_query("UPDATE users SET points=0 WHERE user_id=%s",(uid,))
         if ADMIN_ID:
-            await context.bot.send_message(ADMIN_ID, f"💸 Withdrawal\nUser: {uid}\nWallet: {user[4]}\nAmount: {amount} USDT")
+            try:
+                await context.bot.send_message(ADMIN_ID, f"💸 Withdrawal\nUser: {uid}\nWallet: {user[4]}\nAmount: {amount} USDT")
+            except: pass
         await q.message.reply_text(txt["withdraw_sent"])
         return
 
@@ -219,17 +222,17 @@ async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def finish_trade(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     uid = job.data["uid"]
-    start_price = job.data["start"]
+    start_p = job.data["start"]
     message = job.data["message"]
-    end_price = await get_btc()
+    end_p = await get_btc()
     
-    win = end_price > start_price
+    win = end_p > start_p
     if win:
         db_query("UPDATE users SET points=points+250,wins=wins+1 WHERE user_id=%s",(uid,))
     db_query("UPDATE users SET active_trade=FALSE WHERE user_id=%s",(uid,))
     
-    status_text = "✅ WIN!" if win else "❌ LOSS"
-    await message.edit_text(f"{status_text}\nPrice: {end_price}")
+    status = "✅ WIN!" if win else "❌ LOSS"
+    await message.edit_text(f"{status}\nPrice: {end_p}")
     await asyncio.sleep(2)
     user = get_user(uid)
     text, kb = main_menu(user)
@@ -260,7 +263,7 @@ async def lifespan(app: FastAPI):
     await ptb_app.start()
     webhook_url = f"{RENDER_URL}/{TOKEN}"
     await ptb_app.bot.set_webhook(webhook_url)
-    print(f"Webhook set to: {webhook_url}")
+    print(f"WEBHOOK SET: {webhook_url}")
     yield
     # إيقاف البوت عند إغلاق السيرفر
     await ptb_app.stop()
@@ -277,10 +280,9 @@ async def webhook_handler(request: Request):
 
 @api.get("/")
 async def home():
-    return {"status": "Bot is running"}
+    return {"status": "Bot is active"}
 
 if __name__ == "__main__":
     import uvicorn
-    # التشغيل باستخدام uvicorn مباشرة
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(api, host="0.0.0.0", port=port)
