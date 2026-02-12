@@ -10,12 +10,13 @@ from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
+    MessageHandler,
     ContextTypes,
+    filters,
 )
 from telegram.constants import ParseMode
 
 # ================= CONFIG =================
-
 TOKEN = os.getenv("BOT_TOKEN")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -23,51 +24,12 @@ CMC_KEY = os.getenv("CMC_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 POINTS_PER_USDT = 1000
-MIN_WITHDRAW_POINTS = 10000  # 10 USDT
+MIN_WITHDRAW_USDT = 10
+MIN_WITHDRAW_POINTS = MIN_WITHDRAW_USDT * POINTS_PER_USDT
 
 app = Flask(__name__)
 
-# ================= TEXTS =================
-
-STRINGS = {
-    "en": {
-        "welcome": "<b>👋 Welcome to TradeBot!</b>",
-        "dashboard": "<b>💎 Dashboard</b>\n\n💰 Points: <code>{}</code>\n💵 USDT: <code>{:.2f}</code>\n📊 Trades: <code>{}</code>\n🏆 Wins: <code>{}</code>\n🔗 Wallet: <code>{}</code>",
-        "up": "🚀 Up",
-        "down": "📉 Down",
-        "wallet": "💳 Set Wallet",
-        "withdraw": "💸 Withdraw",
-        "active": "⚠️ Active trade already!",
-        "low": "❌ Not enough points!",
-        "monitor": "⏳ Monitoring...\nEntry: ${}",
-        "win": "✅ WIN!\nPrice: ${}",
-        "loss": "❌ LOSS\nPrice: ${}",
-        "min_withdraw": "⚠️ Minimum withdrawal is 10 USDT",
-        "no_wallet": "⚠️ Please set wallet first",
-        "wallet_saved": "✅ Wallet saved!",
-        "invalid_wallet": "❌ Invalid TRC20 address",
-    },
-    "ar": {
-        "welcome": "<b>👋 أهلاً بك في بوت التداول!</b>",
-        "dashboard": "<b>💎 لوحة التحكم</b>\n\n💰 النقاط: <code>{}</code>\n💵 دولار: <code>{:.2f}</code>\n📊 الصفقات: <code>{}</code>\n🏆 الفوز: <code>{}</code>\n🔗 المحفظة: <code>{}</code>",
-        "up": "🚀 صعود",
-        "down": "📉 هبوط",
-        "wallet": "💳 تعيين المحفظة",
-        "withdraw": "💸 سحب",
-        "active": "⚠️ لديك صفقة مفتوحة!",
-        "low": "❌ نقاط غير كافية!",
-        "monitor": "⏳ جاري المراقبة...\nسعر الدخول: ${}",
-        "win": "✅ ربح!\nالسعر: ${}",
-        "loss": "❌ خسارة\nالسعر: ${}",
-        "min_withdraw": "⚠️ الحد الأدنى للسحب 10 دولار",
-        "no_wallet": "⚠️ يرجى تعيين المحفظة",
-        "wallet_saved": "✅ تم حفظ المحفظة",
-        "invalid_wallet": "❌ عنوان غير صحيح",
-    },
-}
-
 # ================= DATABASE =================
-
 db_pool = pool.SimpleConnectionPool(1, 20, DATABASE_URL)
 
 def db_query(query, params=(), fetch=False):
@@ -91,7 +53,7 @@ def init_db():
         wins INT DEFAULT 0,
         wallet TEXT,
         active_trade BOOLEAN DEFAULT FALSE,
-        lang TEXT DEFAULT 'en'
+        lang TEXT
     )
     """)
     db_query("""
@@ -99,8 +61,9 @@ def init_db():
         id SERIAL PRIMARY KEY,
         user_id BIGINT,
         wallet TEXT,
-        amount FLOAT,
-        status TEXT DEFAULT 'pending'
+        amount_usdt FLOAT,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
@@ -111,11 +74,10 @@ def get_user(uid):
         return get_user(uid)
     return user
 
-# ================= BTC =================
-
+# ================= BTC PRICE =================
 btc_cache = {"price": None, "time": 0}
 
-async def get_btc():
+async def get_btc(symbol="BTC"):
     now = time.time()
     if btc_cache["price"] and now - btc_cache["time"] < 10:
         return btc_cache["price"]
@@ -125,141 +87,202 @@ async def get_btc():
             async with session.get(
                 "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
                 headers={"X-CMC_PRO_API_KEY": CMC_KEY},
-                params={"symbol": "BTC", "convert": "USDT"},
+                params={"symbol": symbol, "convert": "USDT"},
             ) as r:
                 data = await r.json()
-                price = round(float(data["data"]["BTC"]["quote"]["USDT"]["price"]), 2)
+                price = round(float(data["data"][symbol]["quote"]["USDT"]["price"]), 2)
                 btc_cache["price"] = price
                 btc_cache["time"] = now
                 return price
     except:
         return 60000.0
 
-# ================= MENU =================
+# ================= TEXTS =================
+STRINGS = {
+    "en": {
+        "choose_lang": "🌍 Please choose your language:",
+        "welcome": "<b>👋 Welcome!</b>",
+        "dashboard": "<b>💎 Dashboard</b>\n\n💰 Points: <code>{}</code>\n💵 USDT: <code>{:.2f}</code>\n📊 Trades: <code>{}</code>\n🏆 Wins: <code>{}</code>\n🔗 Wallet: <code>{}</code>",
+        "trade": "🎲 Start Trade",
+        "wallet": "💳 Set Wallet",
+        "withdraw": "💸 Withdraw",
+        "active_trade": "⚠️ You have an active trade!",
+        "low_points": "❌ Not enough points!",
+        "monitor": "⏳ Trade Active...\nEntry Price: ${}\nDuration: 60s",
+        "win": "✅ WIN!\nPrice: ${}\n+250 Points",
+        "loss": "❌ LOSS\nPrice: ${}\n-100 Points",
+        "send_wallet": "📌 Send your USDT TRC20 wallet:",
+        "wallet_saved": "✅ Wallet saved!",
+        "invalid_wallet": "❌ Invalid TRC20 address",
+        "withdraw_min": "⚠️ Minimum 10 USDT",
+        "withdraw_no_wallet": "⚠️ Set wallet first",
+        "withdraw_sent": "✅ Withdrawal request sent",
+        "lang_btn": "🌐 Change Language",
+    },
+    "ar": {
+        "choose_lang": "🌍 اختر لغتك:",
+        "welcome": "<b>👋 أهلاً بك!</b>",
+        "dashboard": "<b>💎 لوحة التحكم</b>\n\n💰 النقاط: <code>{}</code>\n💵 دولار: <code>{:.2f}</code>\n📊 الصفقات: <code>{}</code>\n🏆 الفوز: <code>{}</code>\n🔗 المحفظة: <code>{}</code>",
+        "trade": "🎲 بدء المراهنة",
+        "wallet": "💳 تعيين المحفظة",
+        "withdraw": "💸 سحب",
+        "active_trade": "⚠️ لديك صفقة مفتوحة!",
+        "low_points": "❌ نقاط غير كافية!",
+        "monitor": "⏳ جارٍ المراقبة...\nسعر الدخول: ${}\nالمدة: 60 ثانية",
+        "win": "✅ ربح!\nالسعر: ${}\n+250 نقاط",
+        "loss": "❌ خسارة\nالسعر: ${}\n-100 نقاط",
+        "send_wallet": "📌 أرسل عنوان محفظتك USDT TRC20:",
+        "wallet_saved": "✅ تم حفظ المحفظة!",
+        "invalid_wallet": "❌ عنوان غير صالح",
+        "withdraw_min": "⚠️ الحد الأدنى 10 دولار",
+        "withdraw_no_wallet": "⚠️ عيّن المحفظة أولاً",
+        "withdraw_sent": "✅ تم إرسال طلب السحب",
+        "lang_btn": "🌐 تغيير اللغة",
+    }
+}
 
+# ================= MENU =================
 def main_menu(user):
     uid, points, trades, wins, wallet, active, lang = user
     txt = STRINGS[lang]
     usdt = points / POINTS_PER_USDT
-    wallet_display = wallet if wallet else "Not Set"
+    wallet_display = wallet if wallet else ("Not Set" if lang=="en" else "غير محدد")
 
     text = txt["dashboard"].format(points, usdt, trades, wins, wallet_display)
 
-    kb = [
-        [InlineKeyboardButton(txt["up"], callback_data="t_up"),
-         InlineKeyboardButton(txt["down"], callback_data="t_down")],
-        [InlineKeyboardButton(txt["wallet"], callback_data="set_wallet")],
-        [InlineKeyboardButton(txt["withdraw"], callback_data="withdraw")]
+    keyboard = [
+        [InlineKeyboardButton(txt["trade"], callback_data="trade")],
+        [InlineKeyboardButton(txt["wallet"], callback_data="set_wallet"),
+         InlineKeyboardButton(txt["withdraw"], callback_data="withdraw")],
+        [InlineKeyboardButton(txt["lang_btn"], callback_data="change_lang")]
     ]
 
-    return text, InlineKeyboardMarkup(kb)
+    return text, InlineKeyboardMarkup(keyboard)
 
 # ================= HANDLERS =================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_user(update.effective_user.id)
-    text, kb = main_menu(user)
-    await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    kb = [
+        [InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
+         InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")]
+    ]
+    await update.message.reply_text("🌍 Choose your language / اختر اللغة:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
     uid = q.from_user.id
     user = get_user(uid)
-    txt = STRINGS[user[6]]
+    data = q.data
 
-    if q.data == "set_wallet":
-        context.user_data["await_wallet"] = True
-        await q.message.reply_text("Send TRC20 wallet:")
+    # Language selection
+    if data.startswith("lang_"):
+        lang = data.split("_")[1]
+        db_query("UPDATE users SET lang=%s WHERE user_id=%s", (lang, uid))
+        user = get_user(uid)
+        text, kb = main_menu(user)
+        await q.edit_message_text(STRINGS[lang]["welcome"], parse_mode=ParseMode.HTML)
+        await q.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
-    if q.data == "withdraw":
+    lang = user[6]
+    txt = STRINGS[lang]
+
+    # Change language
+    if data=="change_lang":
+        kb = [
+            [InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
+             InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")]
+        ]
+        await q.edit_message_text(txt["choose_lang"], reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    # Set wallet
+    if data=="set_wallet":
+        context.user_data["await_wallet"] = True
+        await q.message.reply_text(txt["send_wallet"])
+        return
+
+    # Withdraw
+    if data=="withdraw":
         if user[1] < MIN_WITHDRAW_POINTS:
-            await q.answer(txt["min_withdraw"], show_alert=True)
+            await q.message.reply_text(txt["withdraw_min"])
             return
         if not user[4]:
-            await q.answer(txt["no_wallet"], show_alert=True)
+            await q.message.reply_text(txt["withdraw_no_wallet"])
             return
-
-        amount = user[1] / POINTS_PER_USDT
-        db_query("INSERT INTO withdrawals (user_id,wallet,amount) VALUES (%s,%s,%s)",
-                 (uid, user[4], amount))
-        db_query("UPDATE users SET points=0 WHERE user_id=%s", (uid,))
-
-        await context.bot.send_message(
-            ADMIN_ID,
-            f"💸 Withdrawal\nUser: {uid}\nWallet: {user[4]}\nAmount: {amount} USDT"
-        )
-
-        await q.answer("Request sent ✅", show_alert=True)
+        amount = user[1]/POINTS_PER_USDT
+        db_query("INSERT INTO withdrawals (user_id,wallet,amount_usdt) VALUES (%s,%s,%s)", (uid,user[4],amount))
+        db_query("UPDATE users SET points=0 WHERE user_id=%s",(uid,))
+        await context.bot.send_message(ADMIN_ID,f"💸 Withdrawal\nUser: {uid}\nWallet: {user[4]}\nAmount: {amount} USDT")
+        await q.message.reply_text(txt["withdraw_sent"])
         return
 
-    if q.data.startswith("t_"):
+    # Trade
+    if data=="trade":
         if user[5]:
-            await q.answer(txt["active"], show_alert=True)
+            await q.message.reply_text(txt["active_trade"])
             return
-        if user[1] < 100:
-            await q.answer(txt["low"], show_alert=True)
+        if user[1]<100:
+            await q.message.reply_text(txt["low_points"])
             return
 
         price = await get_btc()
+        db_query("UPDATE users SET points=points-100,trades=trades+1,active_trade=TRUE WHERE user_id=%s",(uid,))
+        await q.edit_message_text(txt["monitor"].format(price))
 
-        db_query("UPDATE users SET points=points-100,trades=trades+1,active_trade=TRUE WHERE user_id=%s", (uid,))
-        await q.edit_message_text(txt["monitor"].format(price), parse_mode=ParseMode.HTML)
-
-        context.job_queue.run_once(finish_trade, 60, data={
-            "uid": uid,
-            "start": price,
-            "dir": "up" if q.data == "t_up" else "down",
-            "msg_id": q.message.message_id
-        })
+        context.job_queue.run_once(finish_trade,60,data={"uid":uid,"start":price,"direction":"up","message":q.message})
 
 async def finish_trade(context: ContextTypes.DEFAULT_TYPE):
-    data = context.job.data
-    user = get_user(data["uid"])
-    txt = STRINGS[user[6]]
+    job = context.job
+    uid = job.data["uid"]
+    start = job.data["start"]
+    direction = job.data["direction"]
+    message = job.data["message"]
 
-    end_price = await get_btc()
-
-    win = (data["dir"] == "up" and end_price > data["start"]) or \
-          (data["dir"] == "down" and end_price < data["start"])
+    end = await get_btc()
+    win = (direction=="up" and end>start) or (direction=="down" and end<start)
 
     if win:
-        db_query("UPDATE users SET points=points+250,wins=wins+1 WHERE user_id=%s", (data["uid"],))
+        db_query("UPDATE users SET points=points+250,wins=wins+1 WHERE user_id=%s",(uid,))
+    db_query("UPDATE users SET active_trade=FALSE WHERE user_id=%s",(uid,))
 
-    db_query("UPDATE users SET active_trade=FALSE WHERE user_id=%s", (data["uid"],))
-
-    final_text = txt["win"].format(end_price) if win else txt["loss"].format(end_price)
-
-    await context.bot.edit_message_text(
-        chat_id=data["uid"],
-        message_id=data["msg_id"],
-        text=final_text,
-        parse_mode=ParseMode.HTML
-    )
-
+    await message.edit_text(f"{'✅ WIN!' if win else '❌ LOSS'}\nPrice: {end}")
     await asyncio.sleep(3)
-    user = get_user(data["uid"])
-    text, kb = main_menu(user)
-    await context.bot.send_message(data["uid"], text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    user = get_user(uid)
+    text,kb = main_menu(user)
+    await message.reply_text(text,reply_markup=kb,parse_mode=ParseMode.HTML)
+
+async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("await_wallet"):
+        wallet = update.message.text.strip()
+        if not wallet.startswith("T") or len(wallet)<30:
+            await update.message.reply_text(STRINGS["en"]["invalid_wallet"])
+            return
+        db_query("UPDATE users SET wallet=%s WHERE user_id=%s",(wallet,update.effective_user.id))
+        context.user_data["await_wallet"]=False
+        await update.message.reply_text(STRINGS["en"]["wallet_saved"])
 
 # ================= TELEGRAM INIT =================
-
 ptb_app = Application.builder().token(TOKEN).build()
 ptb_app.add_handler(CommandHandler("start", start))
 ptb_app.add_handler(CallbackQueryHandler(handle_cb))
+ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet))
+
+# ================= WEBHOOK =================
+import concurrent.futures
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
 @app.post(f"/{TOKEN}")
 def webhook():
     update = Update.de_json(request.get_json(force=True), ptb_app.bot)
-    asyncio.run(ptb_app.process_update(update))
-    return "ok", 200
+    executor.submit(lambda: asyncio.run(ptb_app.process_update(update)))
+    return "ok",200
 
 @app.route("/")
 def home():
-    return "Bot Running", 200
+    return "Bot Running",200
 
+# ================= START THREAD =================
 async def init_bot():
     init_db()
     await ptb_app.initialize()
