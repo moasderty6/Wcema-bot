@@ -1,14 +1,18 @@
+# استخدم Python 3.11
 FROM python:3.11-slim
 
+# إعداد مجلد العمل
 WORKDIR /app
 
+# نسخ الملفات
 COPY . /app
 
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
-RUN pip install gunicorn
+# تثبيت المتطلبات
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-ENV PORT=10000
+# exposed port
+EXPOSE 10000
 
-# تشغيل Flask باستخدام Gunicorn مع threads لدعم asyncio
-CMD ["gunicorn", "-w", "1", "--threads", "8", "-b", "0.0.0.0:10000", "main:app"]
+# أمر التشغيل
+CMD ["uvicorn", "main:api", "--host", "0.0.0.0", "--port", "10000"]
