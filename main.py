@@ -1,138 +1,173 @@
 import os
+import json
+import random
 import asyncio
 import requests
 from flask import Flask, request
-from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.constants import ParseMode
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 
-load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
-CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3" # تم دمج المفتاح الخاص بك
+CMC_API_KEY = os.getenv("CMC_API_KEY")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 app = Flask(__name__)
-users_db = {}
+users = {}
 
-STRINGS = {
-    "ar": {
-        "welcome": "<b>🌟 مرحباً بك في Moonbix Pro</b>\n\n🎯 <b>رصيدك:</b> <code>{points}</code> نقطة\n📊 <b>الصفقات:</b> <code>{total}</code>\n\n<i>توقع حركة BTC خلال 60 ثانية:</i>",
-        "trade_up": "🚀 صعود", "trade_down": "📉 هبوط", "balance_btn": "💰 الرصيد", "lang_btn": "🇺🇸 English",
-        "recording": "<b>⌛️ جاري المراقبة...</b>\n\n🔹 <b>اتجاهك:</b> {choice}\n🔹 <b>سعر الدخول:</b> <code>${price}</code>",
-        "win": "<b>✅ صفقة ناجحة! (+150)</b>\n💰 السعر: <code>${price}</code>",
-        "loss": "<b>❌ صفقة خاسرة! (-100)</b>\n🔻 السعر: <code>${price}</code>",
-        "up": "صعود 🟢", "down": "هبوط 🔴"
-    },
-    "en": {
-        "welcome": "<b>🌟 Welcome to Moonbix Pro</b>\n\n🎯 <b>Balance:</b> <code>{points}</code> PTS\n📊 <b>Trades:</b> <code>{total}</code>\n\n<i>Predict BTC in 60s:</i>",
-        "trade_up": "🚀 Long", "trade_down": "📉 Short", "balance_btn": "💰 Balance", "lang_btn": "🇸🇦 العربية",
-        "recording": "<b>⌛️ Monitoring...</b>\n\n🔹 <b>Direction:</b> {choice}\n🔹 <b>Entry:</b> <code>${price}</code>",
-        "win": "<b>✅ Success! (+150)</b>\n💰 Price: <code>${price}</code>",
-        "loss": "<b>❌ Failed! (-100)</b>\n🔻 Price: <code>${price}</code>",
-        "up": "UP 🟢", "down": "DOWN 🔴"
-    }
-}
+COINS = [
+    "BTC", "ETH", "BNB", "SOL", "XRP",
+    "ADA", "DOGE", "DOT", "TRX", "MATIC"
+]
 
-ptb_app = Application.builder().token(TOKEN).build()
-
-# --- وظيفة جلب السعر باستخدام CMC ---
-def get_btc_price():
-    try:
-        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        parameters = {'symbol': 'BTC', 'convert': 'USDT'}
-        headers = {
-            'Accepts': 'application/json',
-            'X-CMC_PRO_API_KEY': CMC_API_KEY,
+# -------- USER INIT --------
+def get_user(user):
+    if user.id not in users:
+        users[user.id] = {
+            "username": user.username,
+            "balance": 1000,
+            "wallet": None,
+            "invites": 0,
         }
-        response = requests.get(url, headers=headers, params=parameters, timeout=10)
-        data = response.json()
-        price = data['data']['BTC']['quote']['USDT']['price']
-        return round(float(price), 2)
-    except Exception as e:
-        print(f"CMC API Error: {e}")
-        return None
+    return users[user.id]
 
+# -------- PRICE FROM CMC --------
+def get_price(symbol):
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+    headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
+    params = {"symbol": symbol}
+    response = requests.get(url, headers=headers, params=params)
+    data = response.json()
+    return data["data"][symbol]["quote"]["USD"]["price"]
+
+# -------- MAIN MENU --------
+def main_menu():
+    keyboard = [
+        [InlineKeyboardButton("👤 Account", callback_data="account")],
+        [InlineKeyboardButton("📈 Bet", callback_data="bet")],
+        [InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")],
+        [InlineKeyboardButton("🎁 Earn Points", callback_data="earn")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# -------- START --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in users_db:
-        users_db[user_id] = {"points": 1000, "lang": None, "total": 0}
-    
-    if users_db[user_id]["lang"] is None:
-        keyboard = [[InlineKeyboardButton("العربية 🇸🇦", callback_data='set_lang_ar')],
-                    [InlineKeyboardButton("English 🇺🇸", callback_data='set_lang_en')]]
-        await update.message.reply_text("<b>Choose Language / اختر اللغة</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-    else:
-        await show_main_menu(update, user_id)
+    user = get_user(update.effective_user)
+    await update.message.reply_text(
+        "Welcome to Crypto Betting Bot 🚀",
+        reply_markup=main_menu()
+    )
 
-async def show_main_menu(update_or_query, user_id):
-    lang = users_db[user_id]["lang"]
-    text = STRINGS[lang]["welcome"].format(points=users_db[user_id]["points"], total=users_db[user_id]["total"])
-    keyboard = [[InlineKeyboardButton(STRINGS[lang]["trade_up"], callback_data='trade_up'),
-                 InlineKeyboardButton(STRINGS[lang]["trade_down"], callback_data='trade_down')],
-                [InlineKeyboardButton(STRINGS[lang]["balance_btn"], callback_data='balance')],
-                [InlineKeyboardButton(STRINGS[lang]["lang_btn"], callback_data='change_lang')]]
-    
-    markup = InlineKeyboardMarkup(keyboard)
-    if isinstance(update_or_query, Update):
-        await update_or_query.message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
-    else:
-        await update_or_query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+# -------- BUTTON HANDLER --------
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = get_user(query.from_user)
 
-async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer(); user_id = query.from_user.id; data = query.data
-    
-    if data.startswith("set_lang_"):
-        users_db[user_id]["lang"] = data.split("_")[2]
-        await show_main_menu(query, user_id); return
-    
-    if data == "change_lang":
-        users_db[user_id]["lang"] = "en" if users_db[user_id]["lang"] == "ar" else "ar"
-        await show_main_menu(query, user_id); return
+    if query.data == "account":
+        text = f"""
+👤 Username: @{user['username']}
+🆔 ID: {query.from_user.id}
+💰 Balance: {user['balance']} Points
+💵 Value: {user['balance']/1000} USDT
+🏦 Wallet: {user['wallet']}
+"""
+        await query.edit_message_text(text, reply_markup=main_menu())
 
-    lang = users_db[user_id].get("lang", "ar")
+    elif query.data == "bet":
+        keyboard = [
+            [InlineKeyboardButton(c, callback_data=f"coin_{c}")]
+            for c in COINS
+        ]
+        await query.edit_message_text(
+            "Choose a coin:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-    if data.startswith("trade_"):
-        choice = data.split("_")[1]
-        price_start = get_btc_price()
-        if not price_start:
-            await query.edit_message_text("❌ Error fetching CMC price. Check API key!"); return
+    elif query.data.startswith("coin_"):
+        coin = query.data.split("_")[1]
+        context.user_data["coin"] = coin
+        price = get_price(coin)
+        context.user_data["start_price"] = price
 
-        users_db[user_id]['points'] -= 100
-        users_db[user_id]['total'] += 1
-        choice_text = STRINGS[lang]["up"] if choice == "up" else STRINGS[lang]["down"]
-        
-        await query.edit_message_text(STRINGS[lang]["recording"].format(choice=choice_text, price=f"{price_start:,}"), parse_mode=ParseMode.HTML)
-        
-        await asyncio.sleep(60) # انتظار 60 ثانية
-        
-        price_end = get_btc_price()
-        win = (choice == "up" and price_end > price_start) or (choice == "down" and price_end < price_start)
-        users_db[user_id]['points'] += 250 if win else 0
-        
-        result_text = STRINGS[lang]["win" if win else "loss"].format(price=f"{price_end:,}")
-        await query.edit_message_text(f"{result_text}\n\n🎯 رصيدك: {users_db[user_id]['points']}", parse_mode=ParseMode.HTML)
-        await asyncio.sleep(4)
-        await show_main_menu(query, user_id)
+        keyboard = [
+            [
+                InlineKeyboardButton("📈 UP", callback_data="up"),
+                InlineKeyboardButton("📉 DOWN", callback_data="down"),
+            ]
+        ]
 
-ptb_app.add_handler(CommandHandler("start", start))
-ptb_app.add_handler(CallbackQueryHandler(handle_callbacks))
+        await query.edit_message_text(
+            f"{coin} Price: {price}\nChoose direction:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-@app.post(f"/{TOKEN}")
-async def respond():
-    update = Update.de_json(request.get_json(force=True), ptb_app.bot)
-    await ptb_app.process_update(update)
+    elif query.data in ["up", "down"]:
+        direction = query.data
+        coin = context.user_data["coin"]
+        start_price = context.user_data["start_price"]
+
+        await query.edit_message_text("⏳ Waiting 60 seconds...")
+
+        await asyncio.sleep(60)
+
+        end_price = get_price(coin)
+        win = (
+            (direction == "up" and end_price > start_price) or
+            (direction == "down" and end_price < start_price)
+        )
+
+        if win:
+            user["balance"] += 100
+            result = "🎉 You WON +100 Points!"
+        else:
+            user["balance"] -= 100
+            result = "❌ You LOST -100 Points!"
+
+        await query.message.reply_text(
+            f"{coin} Start: {start_price}\n"
+            f"{coin} End: {end_price}\n\n"
+            f"{result}",
+            reply_markup=main_menu()
+        )
+
+    elif query.data == "withdraw":
+        if user["balance"] >= 10000:
+            user["balance"] -= 10000
+            await query.edit_message_text(
+                "✅ Withdraw request submitted (10 USDT)",
+                reply_markup=main_menu()
+            )
+        else:
+            await query.edit_message_text(
+                "❌ You need 10000 points (10 USDT)",
+                reply_markup=main_menu()
+            )
+
+    elif query.data == "earn":
+        invite_link = f"https://t.me/{context.bot.username}?start={query.from_user.id}"
+        await query.edit_message_text(
+            f"Share this link:\n{invite_link}\n\n"
+            "You earn 100 points per user.",
+            reply_markup=main_menu()
+        )
+
+# -------- WEBHOOK ROUTE --------
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    asyncio.run(application.process_update(update))
     return "ok"
 
-@app.route('/')
-def health(): return "CMC Edition Running", 200
-
-async def init_bot():
-    await ptb_app.initialize()
-    await ptb_app.start()
-    await ptb_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/{TOKEN}")
-
+# -------- RUN --------
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(init_bot())
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button))
+
+    application.bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}")
+    app.run(host="0.0.0.0", port=10000)
