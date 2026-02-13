@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 import aiohttp
 import psycopg2
 from psycopg2 import pool
@@ -23,7 +24,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CMC_KEY = os.getenv("CMC_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID") or 0)
 
 POINTS_PER_USDT = 1000
 MIN_WITHDRAW_POINTS = 10 * POINTS_PER_USDT
@@ -31,25 +32,18 @@ TRADE_COST = 100
 TRADE_REWARD = 250
 TRADE_DURATION = 60
 
-# ================= FASTAPI =================
-app = FastAPI()
-
-# ================= DATABASE =================
-db_pool = psycopg2.pool.SimpleConnectionPool(1, 20, DATABASE_URL)
+# ================= DATABASE SETUP =================
+# استخدام ThreadedConnectionPool لضمان استقرار الربط مع FastAPI
+db_pool = psycopg2.pool.ThreadedConnectionPool(1, 20, DATABASE_URL)
 
 def db_query(query, params=(), fetch=False, fetchall=False):
     conn = db_pool.getconn()
     try:
-        cur = conn.cursor()
-        cur.execute(query, params)
-        result = None
-        if fetch:
-            result = cur.fetchone()
-        if fetchall:
-            result = cur.fetchall()
-        conn.commit()
-        cur.close()
-        return result
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            if fetch: return cur.fetchone()
+            if fetchall: return cur.fetchall()
+            conn.commit()
     finally:
         db_pool.putconn(conn)
 
@@ -83,7 +77,7 @@ def get_user(uid):
         return get_user(uid)
     return user
 
-# ================= PRICE CACHE =================
+# ================= PRICE FETCHING =================
 price_cache = {"price": None, "time": 0}
 
 async def get_price(symbol="BTC"):
@@ -93,44 +87,44 @@ async def get_price(symbol="BTC"):
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
-                headers={"X-CMC_PRO_API_KEY": CMC_KEY},
-                params={"symbol": symbol, "convert": "USDT"},
-            ) as r:
+            headers = {"X-CMC_PRO_API_KEY": CMC_KEY}
+            params = {"symbol": symbol, "convert": "USDT"}
+            async with session.get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest", 
+                                   headers=headers, params=params) as r:
                 data = await r.json()
                 price = round(float(data["data"][symbol]["quote"]["USDT"]["price"]), 2)
                 price_cache["price"] = price
                 price_cache["time"] = now
                 return price
-    except:
+    except Exception as e:
+        print(f"Price Error: {e}")
         return 60000.0
 
-# ================= MENU =================
+# ================= UI DASHBOARD =================
 def dashboard(user):
     uid, points, trades, wins, wallet, active, awaiting = user
     usdt = points / POINTS_PER_USDT
-    wallet_display = wallet if wallet else "Not Set"
+    wallet_display = wallet if wallet else "🚫 Not Set"
 
     text = (
-        "<b>💎 Dashboard</b>\n\n"
-        f"💰 Points: <code>{points}</code>\n"
-        f"💵 USDT: <code>{usdt:.2f}</code>\n"
-        f"📊 Trades: <code>{trades}</code>\n"
-        f"🏆 Wins: <code>{wins}</code>\n"
-        f"🔗 Wallet: <code>{wallet_display}</code>"
+        "<b>💎 Trading Dashboard</b>\n\n"
+        f"💰 <b>Points:</b> <code>{points}</code>\n"
+        f"💵 <b>Balance:</b> <code>{usdt:.2f} USDT</code>\n"
+        "--------------------------\n"
+        f"📊 <b>Total Trades:</b> <code>{trades}</code>\n"
+        f"🏆 <b>Total Wins:</b> <code>{wins}</code>\n"
+        f"🔗 <b>Wallet:</b> <code>{wallet_display}</code>"
     )
 
     keyboard = [
-        [InlineKeyboardButton("📈 UP", callback_data="trade_up"),
-         InlineKeyboardButton("📉 DOWN", callback_data="trade_down")],
+        [InlineKeyboardButton("📈 UP (Long)", callback_data="trade_up"),
+         InlineKeyboardButton("📉 DOWN (Short)", callback_data="trade_down")],
         [InlineKeyboardButton("💳 Set Wallet", callback_data="set_wallet"),
          InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")]
     ]
-
     return text, InlineKeyboardMarkup(keyboard)
 
-# ================= HANDLERS =================
+# ================= BOT HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(update.effective_user.id)
     text, kb = dashboard(user)
@@ -138,145 +132,127 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
-
     uid = q.from_user.id
     user = get_user(uid)
     data = q.data
 
-    # ===== SET WALLET =====
     if data == "set_wallet":
         db_query("UPDATE users SET awaiting_wallet=TRUE WHERE user_id=%s", (uid,))
-        await q.message.reply_text("📌 Send your USDT TRC20 wallet address:")
+        await q.message.reply_text("📌 <b>Please send your USDT TRC20 address:</b>", parse_mode=ParseMode.HTML)
+        await q.answer()
         return
 
-    # ===== WITHDRAW =====
     if data == "withdraw":
         if user[1] < MIN_WITHDRAW_POINTS:
-            await q.message.reply_text("⚠️ Minimum withdrawal is 10 USDT")
+            await q.answer("⚠️ Min withdrawal is 10 USDT!", show_alert=True)
             return
         if not user[4]:
-            await q.message.reply_text("⚠️ Set wallet first")
+            await q.answer("⚠️ Please set your wallet first!", show_alert=True)
             return
 
         amount = user[1] / POINTS_PER_USDT
-        db_query("INSERT INTO withdrawals(user_id,wallet,amount_usdt) VALUES(%s,%s,%s)",
-                 (uid, user[4], amount))
+        db_query("INSERT INTO withdrawals(user_id, wallet, amount_usdt) VALUES(%s,%s,%s)", (uid, user[4], amount))
         db_query("UPDATE users SET points=0 WHERE user_id=%s", (uid,))
-
-        await context.bot.send_message(
-            ADMIN_ID,
-            f"💸 Withdrawal Request\nUser: {uid}\nWallet: {user[4]}\nAmount: {amount} USDT"
-        )
-
-        await q.message.reply_text("✅ Withdrawal request sent")
+        
+        await context.bot.send_message(ADMIN_ID, f"🔔 <b>New Withdrawal!</b>\nUser: {uid}\nWallet: {user[4]}\nAmount: {amount} USDT", parse_mode=ParseMode.HTML)
+        await q.message.reply_text("✅ Withdrawal request sent to admin.")
+        await q.answer()
         return
 
-    # ===== TRADE =====
     if data in ["trade_up", "trade_down"]:
-        if user[5]:
-            await q.message.reply_text("⚠️ You already have an active trade")
+        if user[5]: # active_trade
+            await q.answer("⚠️ You already have a trade running!", show_alert=True)
             return
-
         if user[1] < TRADE_COST:
-            await q.message.reply_text("❌ Not enough points")
+            await q.answer("❌ Not enough points!", show_alert=True)
             return
 
         direction = "up" if data == "trade_up" else "down"
-        price = await get_price()
+        entry_price = await get_price()
 
-        db_query("""
-            UPDATE users 
-            SET points=points-%s, trades=trades+1, active_trade=TRUE 
-            WHERE user_id=%s
-        """, (TRADE_COST, uid))
-
+        db_query("UPDATE users SET points=points-%s, trades=trades+1, active_trade=TRUE WHERE user_id=%s", (TRADE_COST, uid))
+        
         await q.edit_message_text(
-            f"⏳ Trade Started ({direction.upper()})\n"
-            f"Entry Price: ${price}\n"
-            f"Duration: {TRADE_DURATION}s"
+            f"🚀 <b>Trade Placed!</b>\n\nDirection: {'📈 UP' if direction=='up' else '📉 DOWN'}\n"
+            f"Entry Price: <code>${entry_price}</code>\n"
+            f"Time Remaining: {TRADE_DURATION}s",
+            parse_mode=ParseMode.HTML
         )
 
-        context.job_queue.run_once(
-            finish_trade,
-            TRADE_DURATION,
-            data={
-                "uid": uid,
-                "start": price,
-                "direction": direction,
-                "message": q.message
-            }
-        )
+        # تشغيل المؤقت لإنهاء الصفقة
+        context.job_queue.run_once(finish_trade, TRADE_DURATION, data={
+            "uid": uid, "start": entry_price, "direction": direction, "msg_id": q.message.message_id, "chat_id": q.message.chat_id
+        })
+        await q.answer()
 
 async def finish_trade(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    uid = job.data["uid"]
-    start = job.data["start"]
-    direction = job.data["direction"]
-    message = job.data["message"]
+    job = context.job.data
+    uid, start_p, direction, msg_id, chat_id = job["uid"], job["start"], job["direction"], job["msg_id"], job["chat_id"]
 
-    end = await get_price()
-
-    win = (end > start and direction == "up") or \
-          (end < start and direction == "down")
+    end_p = await get_price()
+    win = (end_p > start_p and direction == "up") or (end_p < start_p and direction == "down")
 
     if win:
-        db_query("UPDATE users SET points=points+%s, wins=wins+1 WHERE user_id=%s",
-                 (TRADE_REWARD, uid))
-
+        db_query("UPDATE users SET points=points+%s, wins=wins+1 WHERE user_id=%s", (TRADE_REWARD, uid))
+    
     db_query("UPDATE users SET active_trade=FALSE WHERE user_id=%s", (uid,))
-
-    result = "✅ WIN!" if win else "❌ LOSS"
-    await message.edit_text(f"{result}\nFinal Price: ${end}")
-
+    
+    result_text = "✅ <b>WIN!</b>" if win else "❌ <b>LOSS</b>"
+    final_msg = f"{result_text}\n\nEntry: ${start_p}\nExit: ${end_p}"
+    
+    await context.bot.edit_message_text(final_msg, chat_id=chat_id, message_id=msg_id, parse_mode=ParseMode.HTML)
+    
+    # إرسال لوحة التحكم الجديدة
     user = get_user(uid)
     text, kb = dashboard(user)
-    await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
 
-    if user[6]:  # awaiting_wallet
+    if user[6]: # awaiting_wallet
         wallet = update.message.text.strip()
-
         if not wallet.startswith("T") or len(wallet) < 30:
-            await update.message.reply_text("❌ Invalid TRC20 address")
+            await update.message.reply_text("❌ Invalid TRC20 address. Try again.")
             return
 
-        db_query("""
-            UPDATE users 
-            SET wallet=%s, awaiting_wallet=FALSE 
-            WHERE user_id=%s
-        """, (wallet, uid))
+        db_query("UPDATE users SET wallet=%s, awaiting_wallet=FALSE WHERE user_id=%s", (wallet, uid))
+        await update.message.reply_text("✅ Wallet address saved!")
+        # إظهار الداشبورد
+        text, kb = dashboard(get_user(uid))
+        await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
-        await update.message.reply_text("✅ Wallet saved")
-
-# ================= INIT BOT =================
+# ================= FASTAPI & BOT INIT =================
+app = FastAPI()
+# إضافة JobQueue هنا مهمة جداً لضمان عمل التداول
 ptb_app = ApplicationBuilder().token(TOKEN).build()
-
-ptb_app.add_handler(CommandHandler("start", start))
-ptb_app.add_handler(CallbackQueryHandler(handle_buttons))
-ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet))
 
 @app.on_event("startup")
 async def on_startup():
     init_db()
+    ptb_app.add_handler(CommandHandler("start", start))
+    ptb_app.add_handler(CallbackQueryHandler(handle_buttons))
+    ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet))
+    
     await ptb_app.initialize()
     await ptb_app.start()
-    await ptb_app.bot.set_webhook(f"{RENDER_URL}/{TOKEN}")
+    # تعيين الـ Webhook
+    webhook_url = f"{RENDER_URL}/{TOKEN}"
+    await ptb_app.bot.set_webhook(webhook_url)
+    print(f"Webhook set to: {webhook_url}")
 
 @app.post(f"/{TOKEN}")
 async def webhook(req: Request):
     data = await req.json()
-    update = Update.de_json(data, ptb_app.bot)
-    await ptb_app.process_update(update)
+    await ptb_app.process_update(Update.de_json(data, ptb_app.bot))
     return "ok"
 
 @app.get("/")
 async def home():
-    return "Bot Running"
+    return {"status": "running"}
 
 if __name__ == "__main__":
     import uvicorn
+    # بورت الافتراضي 10000 لـ Render
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
