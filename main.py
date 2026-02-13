@@ -178,8 +178,11 @@ async def handle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_query("UPDATE users SET lang=%s WHERE user_id=%s",(lang,uid))
         user = get_user(uid)
         text,kb = main_menu(user)
-        await q.edit_message_text(STRINGS[lang]["welcome"],parse_mode=ParseMode.HTML)
-        await q.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        await q.edit_message_text(
+    STRINGS[lang]["welcome"] + "\n\n" + text,
+    reply_markup=kb,
+    parse_mode=ParseMode.HTML
+)
         return
 
     lang = user[6] or "en"
