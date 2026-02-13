@@ -10,7 +10,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 app = Flask(__name__)
 
-# إنشاء التطبيق
+# إنشاء التطبيق مرة واحدة فقط
 application = Application.builder().token(TOKEN).build()
 
 REPLY_TEXT = (
@@ -19,45 +19,48 @@ REPLY_TEXT = (
 )
 
 def get_keyboard():
-    keyboard = [[InlineKeyboardButton("Go to Bot Now 🔗", url="https://t.me/AiCryptoGPTbot")]]
+    keyboard = [
+        [InlineKeyboardButton("Go to Bot Now 🔗", url="https://t.me/AiCryptoGPTbot")]
+    ]
     return InlineKeyboardMarkup(keyboard)
 
+# --- الهاندلر ---
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(REPLY_TEXT, reply_markup=get_keyboard())
+    if update.message:
+        await update.message.reply_text(
+            REPLY_TEXT,
+            reply_markup=get_keyboard()
+        )
 
-# دالة إعداد البوت (Handlers)
-async def setup_handlers():
-    if not application._initialized:
-        await application.initialize()
-        application.add_handler(CommandHandler("start", start_handler))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start_handler))
+# --- تهيئة البوت مرة واحدة فقط ---
+async def init_telegram():
+    application.add_handler(CommandHandler("start", start_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start_handler))
+    
+    await application.initialize()
+    await application.start()
+
+# --- Webhook Route ---
+@app.route(f"/{TOKEN}", methods=["POST"])
+async def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    await application.process_update(update)
+    return "ok", 200
 
 @app.route("/", methods=["GET"])
 def index():
     return "Bot is online!", 200
 
-@app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook():
-    # التأكد من أن المعالجات مفعّلة
-    await setup_handlers()
-    
-    # استلام التحديث
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    
-    # معالجة التحديث
-    await application.process_update(update)
-    return "ok", 200
-
-# هذه الدالة تقوم بتفعيل الويب هوك عند تشغيل الملف مباشرة
-def set_webhook_sync():
-    url = f"{WEBHOOK_URL}/{TOKEN}"
-    # نستخدم requests بشكل خارجي وسريع لإخبار تليجرام بالرابط الجديد
+# --- تعيين الويب هوك ---
+def set_webhook():
     import requests
+    url = f"{WEBHOOK_URL}/{TOKEN}"
     requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={url}")
 
+# --- تشغيل السيرفر ---
 if __name__ == "__main__":
-    # تفعيل الويب هوك قبل تشغيل Flask
-    set_webhook_sync()
+    asyncio.run(init_telegram())   # 🔥 التهيئة مرة واحدة فقط
+    set_webhook()                  # 🔥 تعيين الويب هوك
     
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
