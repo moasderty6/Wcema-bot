@@ -1,8 +1,10 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
+
 WORKDIR /app
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
-# تفعيل البورت لـ Render
-EXPOSE 10000
-CMD ["python", "main.py"]
+
+CMD ["gunicorn", "-b", "0.0.0.0:10000", "main:app"]
