@@ -1,6 +1,7 @@
-python-telegram-bot[webhooks]>=21.0
-pytonlib
-aiogram==3.*
+fastapi
+uvicorn
+python-telegram-bot[all]
 asyncpg
-Flask
 aiohttp
+python-dotenv
+
