@@ -1,89 +1,138 @@
 import os
 import asyncio
 import requests
-import time
+from flask import Flask, request
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.constants import ParseMode
 
-# تحميل متغيرات البيئة
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3" # تم دمج المفتاح الخاص بك
 
-# تخزين بيانات المستخدمين (في الذاكرة - يفضل SQL في المستقبل)
+app = Flask(__name__)
 users_db = {}
 
+STRINGS = {
+    "ar": {
+        "welcome": "<b>🌟 مرحباً بك في Moonbix Pro</b>\n\n🎯 <b>رصيدك:</b> <code>{points}</code> نقطة\n📊 <b>الصفقات:</b> <code>{total}</code>\n\n<i>توقع حركة BTC خلال 60 ثانية:</i>",
+        "trade_up": "🚀 صعود", "trade_down": "📉 هبوط", "balance_btn": "💰 الرصيد", "lang_btn": "🇺🇸 English",
+        "recording": "<b>⌛️ جاري المراقبة...</b>\n\n🔹 <b>اتجاهك:</b> {choice}\n🔹 <b>سعر الدخول:</b> <code>${price}</code>",
+        "win": "<b>✅ صفقة ناجحة! (+150)</b>\n💰 السعر: <code>${price}</code>",
+        "loss": "<b>❌ صفقة خاسرة! (-100)</b>\n🔻 السعر: <code>${price}</code>",
+        "up": "صعود 🟢", "down": "هبوط 🔴"
+    },
+    "en": {
+        "welcome": "<b>🌟 Welcome to Moonbix Pro</b>\n\n🎯 <b>Balance:</b> <code>{points}</code> PTS\n📊 <b>Trades:</b> <code>{total}</code>\n\n<i>Predict BTC in 60s:</i>",
+        "trade_up": "🚀 Long", "trade_down": "📉 Short", "balance_btn": "💰 Balance", "lang_btn": "🇸🇦 العربية",
+        "recording": "<b>⌛️ Monitoring...</b>\n\n🔹 <b>Direction:</b> {choice}\n🔹 <b>Entry:</b> <code>${price}</code>",
+        "win": "<b>✅ Success! (+150)</b>\n💰 Price: <code>${price}</code>",
+        "loss": "<b>❌ Failed! (-100)</b>\n🔻 Price: <code>${price}</code>",
+        "up": "UP 🟢", "down": "DOWN 🔴"
+    }
+}
+
+ptb_app = Application.builder().token(TOKEN).build()
+
+# --- وظيفة جلب السعر باستخدام CMC ---
 def get_btc_price():
     try:
-        url = "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT"
-        res = requests.get(url).json()
-        return float(res['result']['list'][0]['lastPrice'])
-    except:
+        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        parameters = {'symbol': 'BTC', 'convert': 'USDT'}
+        headers = {
+            'Accepts': 'application/json',
+            'X-CMC_PRO_API_KEY': CMC_API_KEY,
+        }
+        response = requests.get(url, headers=headers, params=parameters, timeout=10)
+        data = response.json()
+        price = data['data']['BTC']['quote']['USDT']['price']
+        return round(float(price), 2)
+    except Exception as e:
+        print(f"CMC API Error: {e}")
         return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in users_db:
-        users_db[user_id] = {"points": 1000, "last_claim": 0}
+        users_db[user_id] = {"points": 1000, "lang": None, "total": 0}
     
-    keyboard = [
-        [InlineKeyboardButton("📈 صعود (60ث)", callback_query_data='trade_up')],
-        [InlineKeyboardButton("📉 هبوط (60ث)", callback_query_data='trade_down')],
-        [InlineKeyboardButton("💰 رصيدي", callback_query_data='balance')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        f"مرحباً بك في محاكي Moonbix! 🚀\n\n"
-        f"رصيدك الحالي: {users_db[user_id]['points']} نقطة.\n"
-        "توقع اتجاه BTC خلال الـ 60 ثانية القادمة واربح!",
-        reply_markup=reply_markup
-    )
-
-async def handle_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    choice = "up" if query.data == "trade_up" else "down"
-    
-    if users_db[user_id]['points'] < 100:
-        await query.edit_message_text("عذراً، رصيدك أقل من 100 نقطة!")
-        return
-
-    price_start = get_btc_price()
-    users_db[user_id]['points'] -= 100 # خصم مبلغ الرهان
-    
-    status_msg = "✅ تم تسجيل توقعك: " + ("صعود 📈" if choice == "up" else "هبوط 📉")
-    status_msg += f"\nسعر الدخول: ${price_start:,}"
-    
-    await query.edit_message_text(f"{status_msg}\n⏳ جاري مراقبة السوق (60 ثانية)...")
-    
-    await asyncio.sleep(60) # الانتظار دقيقة
-    
-    price_end = get_btc_price()
-    win = False
-    if choice == "up" and price_end > price_start: win = True
-    elif choice == "down" and price_end < price_start: win = True
-    
-    if win:
-        users_db[user_id]['points'] += 250 # استرداد الـ 100 + ربح 150
-        result_text = f"🎉 مبروك! ربحت التحدي.\nالسعر النهائي: ${price_end:,}\nرصيدك: {users_db[user_id]['points']}"
+    if users_db[user_id]["lang"] is None:
+        keyboard = [[InlineKeyboardButton("العربية 🇸🇦", callback_data='set_lang_ar')],
+                    [InlineKeyboardButton("English 🇺🇸", callback_data='set_lang_en')]]
+        await update.message.reply_text("<b>Choose Language / اختر اللغة</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
     else:
-        result_text = f"❌ للأسف، خسرت التحدي.\nالسعر النهائي: ${price_end:,}\nرصيدك: {users_db[user_id]['points']}"
+        await show_main_menu(update, user_id)
+
+async def show_main_menu(update_or_query, user_id):
+    lang = users_db[user_id]["lang"]
+    text = STRINGS[lang]["welcome"].format(points=users_db[user_id]["points"], total=users_db[user_id]["total"])
+    keyboard = [[InlineKeyboardButton(STRINGS[lang]["trade_up"], callback_data='trade_up'),
+                 InlineKeyboardButton(STRINGS[lang]["trade_down"], callback_data='trade_down')],
+                [InlineKeyboardButton(STRINGS[lang]["balance_btn"], callback_data='balance')],
+                [InlineKeyboardButton(STRINGS[lang]["lang_btn"], callback_data='change_lang')]]
+    
+    markup = InlineKeyboardMarkup(keyboard)
+    if isinstance(update_or_query, Update):
+        await update_or_query.message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+    else:
+        await update_or_query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+
+async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer(); user_id = query.from_user.id; data = query.data
+    
+    if data.startswith("set_lang_"):
+        users_db[user_id]["lang"] = data.split("_")[2]
+        await show_main_menu(query, user_id); return
+    
+    if data == "change_lang":
+        users_db[user_id]["lang"] = "en" if users_db[user_id]["lang"] == "ar" else "ar"
+        await show_main_menu(query, user_id); return
+
+    lang = users_db[user_id].get("lang", "ar")
+
+    if data.startswith("trade_"):
+        choice = data.split("_")[1]
+        price_start = get_btc_price()
+        if not price_start:
+            await query.edit_message_text("❌ Error fetching CMC price. Check API key!"); return
+
+        users_db[user_id]['points'] -= 100
+        users_db[user_id]['total'] += 1
+        choice_text = STRINGS[lang]["up"] if choice == "up" else STRINGS[lang]["down"]
         
-    await query.edit_message_text(result_text)
+        await query.edit_message_text(STRINGS[lang]["recording"].format(choice=choice_text, price=f"{price_start:,}"), parse_mode=ParseMode.HTML)
+        
+        await asyncio.sleep(60) # انتظار 60 ثانية
+        
+        price_end = get_btc_price()
+        win = (choice == "up" and price_end > price_start) or (choice == "down" and price_end < price_start)
+        users_db[user_id]['points'] += 250 if win else 0
+        
+        result_text = STRINGS[lang]["win" if win else "loss"].format(price=f"{price_end:,}")
+        await query.edit_message_text(f"{result_text}\n\n🎯 رصيدك: {users_db[user_id]['points']}", parse_mode=ParseMode.HTML)
+        await asyncio.sleep(4)
+        await show_main_menu(query, user_id)
 
-async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    points = users_db.get(user_id, {}).get("points", 0)
-    await query.answer(f"رصيدك الحالي: {points} نقطة", show_alert=True)
+ptb_app.add_handler(CommandHandler("start", start))
+ptb_app.add_handler(CallbackQueryHandler(handle_callbacks))
 
-def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_trade, pattern='^trade_'))
-    app.add_handler(CallbackQueryHandler(show_balance, pattern='^balance$'))
-    app.run_polling()
+@app.post(f"/{TOKEN}")
+async def respond():
+    update = Update.de_json(request.get_json(force=True), ptb_app.bot)
+    await ptb_app.process_update(update)
+    return "ok"
+
+@app.route('/')
+def health(): return "CMC Edition Running", 200
+
+async def init_bot():
+    await ptb_app.initialize()
+    await ptb_app.start()
+    await ptb_app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/{TOKEN}")
 
 if __name__ == "__main__":
-    main()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(init_bot())
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
