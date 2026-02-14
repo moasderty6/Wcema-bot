@@ -1,7 +1,7 @@
 import os
 import requests
 import logging
-import psycopg2 # للربط مع قاعدة بيانات Neon
+import psycopg2 
 import asyncio
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -19,7 +19,6 @@ CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
 WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com" 
 PORT = int(os.environ.get('PORT', 5000))
 ADMIN_ID = 6172153716 
-# رابط قاعدة البيانات Neon الخاص بك
 DATABASE_URL = "postgresql://neondb_owner:npg_txJFdgkvBH35@ep-icy-forest-aia1n447-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -31,14 +30,12 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
-    # إنشاء الجدول بالهيكلية الصحيحة
     c.execute('''CREATE TABLE IF NOT EXISTS users 
                  (id BIGINT PRIMARY KEY, 
                   username TEXT, 
                   balance INTEGER DEFAULT 1000, 
                   wallet TEXT DEFAULT 'Not Set')''')
     
-    # إضافة رصيد 100,000 للمستخدم التجريبي
     c.execute("""
         INSERT INTO users (id, username, balance, wallet) 
         VALUES (565965404, 'Tester', 100000, 'Not Set') 
@@ -138,6 +135,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup, parse_mode='HTML'
     )
 
+# --- أمر الأدمن لرؤية الإحصائيات ---
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return # تجاهل إذا لم يكن الأدمن
+
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*), SUM(balance) FROM users")
+    stats = c.fetchone()
+    c.close()
+    conn.close()
+
+    total_users = stats[0] or 0
+    total_balance = stats[1] or 0
+    
+    msg = (f"📊 <b>Bybit Moonbix Stats</b>\n"
+           f"━━━━━━━━━━━━━━\n"
+           f"👥 Total Users: <b>{total_users}</b>\n"
+               f"💰 Total Points: <b>{total_balance:,} Pts</b>\n"
+               f"💵 Total Value: <b>${total_balance/1000:,.2f} USDT</b>")
+    await update.message.reply_text(msg, parse_mode='HTML')
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
@@ -145,7 +165,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user: return
 
     if text == '👤 Account':
-        # اليوزر نيم في الأعلى ثم الـ ID كما طلبت
         msg = (f"🚀 <b>Moonbix Pilot: @{user[1]}</b>\n"
                f"━━━━━━━━━━━━━━\n"
                f"🆔 ID: <code>{user[0]}</code>\n"
@@ -232,6 +251,7 @@ if __name__ == '__main__':
     init_db()
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stats", admin_stats)) # الأمر الجديد للأدمن
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
     application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"{WEBHOOK_URL}/{TOKEN}")
