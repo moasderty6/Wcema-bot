@@ -136,7 +136,7 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.update({'bet_coin': symbol, 'entry_price': price})
         keyboard = [[InlineKeyboardButton("📈 UP", callback_data="dir_up"), 
                      InlineKeyboardButton("📉 DOWN", callback_data="dir_down")]]
-        await query.edit_message_text(f"{symbol}: ${price:.4f}\nPredict 60s direction:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(f"{symbol}: ${price:.4f}\nPredict 10s direction:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data.startswith("dir_"):
         direction = query.data.split("_")[1]
@@ -144,12 +144,12 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entry_price = context.user_data.get('entry_price')
         user_id = query.from_user.id
         
-        await query.edit_message_text(f"⏳ Bet on {symbol} {direction.upper()}...\nResult in 60s.")
+        await query.edit_message_text(f"⏳ Bet on {symbol} {direction.upper()}...\nResult in 10s.")
         
         # التأكد من تمرير البيانات للـ Job بشكل صحيح
         context.job_queue.run_once(
             check_bet_result, 
-            60, 
+            10, 
             data={'uid': user_id, 'symbol': symbol, 'entry': entry_price, 'dir': direction},
             chat_id=query.message.chat_id
         )
