@@ -69,7 +69,7 @@ def get_crypto_price(symbol):
 
 # --- مهمة معالجة الرهان الخلفية (30 ثانية) ---
 async def process_bet(context, user_id, symbol, entry_price, direction):
-    await asyncio.sleep(30) # تقليل الوقت لـ 30 ثانية
+    await asyncio.sleep(30)
     
     exit_price = get_crypto_price(symbol)
     if exit_price:
@@ -138,14 +138,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['waiting_for_withdraw_amount'] = True
 
     elif text == '📢 Earn Points':
-        bot = await context.bot.get_me()
-        share_link = f"https://t.me/{bot.username}?start={user_id}"
+        bot_info = await context.bot.get_me()
+        share_link = f"https://t.me/{bot_info.username}?start={user_id}"
+        # هنا التعديل: الرابط يظهر مرتين، واحدة للنقر وواحدة للنسخ
         msg = (f"📢 *Referral Program*\n\n"
                f"Invite your friends and earn *100 Points* for every new user!\n\n"
-               f"Your link: `{share_link}`")
-        await update.message.reply_text(msg, parse_mode='Markdown')
+               f"🔗 *Click to join:*\n{share_link}\n\n"
+               f"📝 *Copy link:*\n`{share_link}`")
+        await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
 
-    # معالجة إدخال المحفظة
     elif context.user_data.get('waiting_for_wallet'):
         conn = sqlite3.connect('bot_data.db')
         conn.execute("UPDATE users SET wallet = ? WHERE id = ?", (text, user_id))
@@ -154,7 +155,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['waiting_for_wallet'] = False
         await update.message.reply_text("✅ Wallet Saved Successfully!")
 
-    # معالجة إدخال مبلغ السحب
     elif context.user_data.get('waiting_for_withdraw_amount'):
         try:
             amount = int(text)
@@ -163,18 +163,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif amount > user[2]:
                 await update.message.reply_text("❌ Insufficient balance!")
             else:
-                # خصم الرصيد وإرسال طلب للأدمن
                 update_balance(user_id, -amount)
                 context.user_data['waiting_for_withdraw_amount'] = False
-                
-                # إشعار للمستخدم
                 await update.message.reply_text(f"✅ Your withdrawal request for {amount} Pts ({amount/1000} USDT) has been sent to the admin.")
-                
-                # إرسال للأدمن
                 admin_msg = (f"🔔 *New Withdrawal Request*\n\n"
                              f"👤 User: @{user[1]}\n"
                              f"🆔 ID: `{user[0]}`\n"
-               f"💰 Amount: {amount} Pts (${amount/1000} USDT)\n"
+                             f"💰 Amount: {amount} Pts (${amount/1000} USDT)\n"
                              f"🏦 Wallet (TRC20): `{user[3]}`")
                 await context.bot.send_message(ADMIN_ID, admin_msg, parse_mode='Markdown')
         except ValueError:
@@ -198,7 +193,6 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         direction = query.data.split("_")[1]
         symbol = context.user_data['coin']
         price = context.user_data['price']
-        
         await query.edit_message_text(f"⏳ Bet active: {symbol} {direction.upper()}\nWait 30s...")
         asyncio.create_task(process_bet(context, query.from_user.id, symbol, price, direction))
 
