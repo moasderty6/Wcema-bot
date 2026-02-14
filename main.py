@@ -76,11 +76,11 @@ async def process_bet(context, user_id, symbol, entry_price, direction):
         amount = 100 if win else -100
         update_balance(user_id, amount)
         status = "🎉 WIN! +100 Points" if win else "❌ LOSS! -100 Points"
-        msg = (f"📊 *{symbol} Result:*\n\n"
+        msg = (f"📊 <b>{symbol} Result:</b>\n\n"
                f"Entry: ${entry_price:.4f}\n"
                f"Exit: ${exit_price:.4f}\n\n"
-               f"*{status}*")
-        await context.bot.send_message(user_id, msg, parse_mode='Markdown')
+               f"<b>{status}</b>")
+        await context.bot.send_message(user_id, msg, parse_mode='HTML')
     else:
         await context.bot.send_message(user_id, "⚠️ Error fetching result.")
 
@@ -114,10 +114,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user: return
 
     if text == '👤 Account':
-        msg = (f"👤 *Account Info*\n\nID: `{user[0]}`\n"
+        msg = (f"👤 <b>Account Info</b>\n\n"
+               f"ID: <code>{user[0]}</code>\n"
                f"Balance: {user[2]} Pts (${user[2]/1000} USDT)\n"
-               f"Wallet: `{user[3]}`")
-        await update.message.reply_text(msg, parse_mode='Markdown')
+               f"Wallet: <code>{user[3]}</code>")
+        await update.message.reply_text(msg, parse_mode='HTML')
 
     elif text == '🎮 Bet Now':
         coins = ['BTC', 'ETH', 'BNB', 'SOL', 'ADA', 'XRP', 'DOT', 'DOGE', 'AVAX', 'MATIC']
@@ -130,9 +131,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == '🏧 Withdraw':
         if user[2] < 10000:
-            await update.message.reply_text(f"❌ Minimum withdrawal is 10,000 Pts (10 USDT).\nCurrent balance: {user[2]} Pts.")
+            await update.message.reply_text(f"❌ Min withdrawal: 10,000 Pts.\nBalance: {user[2]} Pts.")
         elif user[3] == "Not Set":
-            await update.message.reply_text("❌ Please set your wallet address first via 💼 Wallet button.")
+            await update.message.reply_text("❌ Please set your wallet address via 💼 Wallet button.")
         else:
             await update.message.reply_text(f"✅ Your balance: {user[2]} Pts.\nEnter the amount to withdraw:")
             context.user_data['waiting_for_withdraw_amount'] = True
@@ -140,11 +141,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == '📢 Earn Points':
         bot_info = await context.bot.get_me()
         share_link = f"https://t.me/{bot_info.username}?start={user_id}"
-        # الرابط الآن أزرق وقابل للنقر مباشرة
-        msg = (f"📢 *Referral Program*\n\n"
-               f"Earn *100 Points* for every friend you invite!\n\n"
+        # تم استخدام HTML لضمان عمل الرابط بشكل صحيح
+        msg = (f"📢 <b>Referral Program</b>\n\n"
+               f"Earn <b>100 Points</b> for every friend you invite!\n\n"
                f"Invite Link:\n{share_link}")
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg, parse_mode='HTML', disable_web_page_preview=True)
 
     elif context.user_data.get('waiting_for_wallet'):
         conn = sqlite3.connect('bot_data.db')
@@ -165,10 +166,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update_balance(user_id, -amount)
                 context.user_data['waiting_for_withdraw_amount'] = False
                 await update.message.reply_text(f"✅ Request for {amount} Pts sent to admin.")
-                admin_msg = (f"🔔 *Withdrawal Request*\nUser: @{user[1]}\nID: `{user[0]}`\nAmount: {amount} Pts\nWallet: `{user[3]}`")
-                await context.bot.send_message(ADMIN_ID, admin_msg, parse_mode='Markdown')
+                admin_msg = (f"🔔 <b>Withdrawal Request</b>\nUser: @{user[1]}\nID: <code>{user[0]}</code>\nAmount: {amount} Pts\nWallet: <code>{user[3]}</code>")
+                await context.bot.send_message(ADMIN_ID, admin_msg, parse_mode='HTML')
         except:
-            await update.message.reply_text("❌ Please enter numbers only.")
+            await update.message.reply_text("❌ Enter numbers only.")
 
 async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
