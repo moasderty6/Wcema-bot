@@ -20,7 +20,7 @@ PORT = int(os.environ.get('PORT', 5000))
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- إدارة قاعدة البيانات SQLite ---
+# --- قاعدة البيانات ---
 def init_db():
     conn = sqlite3.connect('bot_data.db')
     c = conn.cursor()
@@ -51,37 +51,26 @@ def update_balance(user_id, amount):
     conn.commit()
     conn.close()
 
-# --- جلب السعر (حل مشكلة CMC) ---
+# --- جلب السعر ---
 def get_crypto_price(symbol):
     try:
         url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        # التأكد من إرسال الرمز بشكل نظيف
         parameters = {'symbol': symbol.strip().upper(), 'convert': 'USD'}
-        headers = {
-            'Accepts': 'application/json',
-            'X-CMC_PRO_API_KEY': CMC_API_KEY,
-        }
+        headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': CMC_API_KEY}
         response = requests.get(url, headers=headers, params=parameters, timeout=10)
         data = response.json()
-        
         if response.status_code == 200:
-            price = data['data'][symbol.upper()]['quote']['USD']['price']
-            return price
-        else:
-            logging.error(f"CMC Error Details: {data}")
-            return None
-    except Exception as e:
-        logging.error(f"Price Fetch Exception: {e}")
+            return data['data'][symbol.upper()]['quote']['USD']['price']
+        return None
+    except:
         return None
 
-# --- معالجات البوت ---
+# --- المعالجات ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or "User"
     
-    user = get_user(user_id)
-    if not user:
-        # نظام الإحالة
+    if not get_user(user_id):
         if context.args:
             try:
                 ref_id = int(context.args[0])
@@ -89,10 +78,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     update_balance(ref_id, 100)
                     await context.bot.send_message(ref_id, "🎁 Referral Bonus! +100 Points.")
             except: pass
-        
         save_user(user_id, username, 1000, "Not Set")
 
-    keyboard = [['🏧 Withdraw'], ['👤 Account', '💼 Wallet'], ['🎮 Bet Now', '📢 Earn Points']]
+    # تعديل ترتيب الأزرار ليكون Bet Now في الأعلى وكبير
+    keyboard = [
+        ['🎮 Bet Now'], 
+        ['🏧 Withdraw', '📢 Earn Points'],
+        ['👤 Account', '💼 Wallet']
+    ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text("Welcome to TG Stars Saving! 🚀", reply_markup=reply_markup)
 
@@ -103,7 +96,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_data: return
 
     if text == '👤 Account':
-        # user_data index: 0=id, 1=username, 2=balance, 3=wallet
         msg = (f"👤 *Account Info*\n\nID: `{user_data[0]}`\n"
                f"Balance: {user_data[2]} Pts (${user_data[2]/1000} USDT)\n"
                f"Wallet: `{user_data[3]}`")
@@ -148,29 +140,56 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("dir_"):
         direction = query.data.split("_")[1]
-        symbol = context.user_data['bet_coin']
-        entry_price = context.user_data['entry_price']
+        symbol = context.user_data.get('bet_coin')
+        entry_price = context.user_data.get('entry_price')
+        user_id = query.from_user.id
         
         await query.edit_message_text(f"⏳ Bet on {symbol} {direction.upper()}...\nResult in 60s.")
-        context.job_queue.run_once(check_bet_result, 60, 
-            data={'uid': query.from_user.id, 'symbol': symbol, 'entry': entry_price, 'dir': direction})
+        
+        # التأكد من تمرير البيانات للـ Job بشكل صحيح
+        context.job_queue.run_once(
+            check_bet_result, 
+            60, 
+            data={'uid': user_id, 'symbol': symbol, 'entry': entry_price, 'dir': direction},
+            chat_id=query.message.chat_id
+        )
 
 async def check_bet_result(context: ContextTypes.DEFAULT_TYPE):
-    data = context.job.data
+    job = context.job
+    data = job.data
     exit_price = get_crypto_price(data['symbol'])
     
     if exit_price:
-        win = (data['dir'] == "up" and exit_price > data['entry']) or (data['dir'] == "down" and exit_price < data['entry'])
+        win = False
+        if data['dir'] == "up" and exit_price > data['entry']: win = True
+        elif data['dir'] == "down" and exit_price < data['entry']: win = True
+        
         amount = 100 if win else -100
         update_balance(data['uid'], amount)
-        res = "🎉 WIN! +100" if win else "❌ LOSS! -100"
-        await context.bot.send_message(data['uid'], f"📊 {data['symbol']} Result:\nEntry: {data['entry']:.4f}\nExit: {exit_price:.4f}\n\n{res}")
+        
+        res = "🎉 WIN! +100 Points" if win else "❌ LOSS! -100 Points"
+        final_msg = (f"📊 *{data['symbol']} Result:*\n\n"
+                     f"Entry: ${data['entry']:.4f}\n"
+                     f"Exit: ${exit_price:.4f}\n\n"
+                     f"*{res}*")
+        
+        await context.bot.send_message(data['uid'], final_msg, parse_mode='Markdown')
+    else:
+        await context.bot.send_message(data['uid'], "⚠️ Error fetching final price. Balance not changed.")
 
 if __name__ == '__main__':
-    init_db() # تشغيل قاعدة البيانات
+    init_db()
+    # بناء التطبيق مع تفعيل الـ JobQueue تلقائياً
     application = Application.builder().token(TOKEN).build()
+    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
 
-    application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"{WEBHOOK_URL}/{TOKEN}")
+    # تشغيل الويب هوك
+    application.run_webhook(
+        listen="0.0.0.0", 
+        port=PORT, 
+        url_path=TOKEN, 
+        webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
+    )
