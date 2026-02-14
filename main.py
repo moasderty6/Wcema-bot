@@ -173,8 +173,11 @@ def webhook_handler():
 def index():
     return "Bot is Running!"
 
+# --- تشغيل البوت ---
+
 if __name__ == '__main__':
     # بناء تطبيق التليجرام
+    # ملاحظة: أضفنا الـ JobQueue هنا ليعمل نظام المراهنة
     application = Application.builder().token(TOKEN).build()
     
     # إضافة الأوامر والمقابض
@@ -182,20 +185,12 @@ if __name__ == '__main__':
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
 
-    # تشغيل Flask على خادم Gunicorn (أو داخلياً للتجربة)
-    # ملاحظة: ريندر يدير المنافذ تلقائياً عبر المتغير PORT
-    import threading
-    
-    # لبدء البوت مع الويب هوك بشكل صحيح:
-    # 1. نقوم بضبط الويب هوك مع تليجرام
-    application.bot.set_webhook(url=WEBHOOK_URL)
-    
-    # 2. تشغيل Flask في Thread منفصل أو استخدامه كـ Entry point
-    # لسهولة الرفع على Render، سنقوم بتشغيل البوت بـ Polling إذا كنت لا تريد تعقيد الويب هوك
-    # أو استخدام الـ Webhook مع Flask كما يلي:
+    # تشغيل الويب هوك
+    # المكتبة ستتولى أمر set_webhook تلقائياً
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path='webhook',
-        webhook_url=WEBHOOK_URL
+        url_path=TOKEN, # نستخدم التوكن كمسار أمان
+        webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
     )
+
