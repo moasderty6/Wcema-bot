@@ -18,6 +18,7 @@ TOKEN = "7793678424:AAH7mXshTdQ4RjynCh-VyzGZAzWtDSSkiFM"
 CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
 WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com" 
 PORT = int(os.environ.get('PORT', 5000))
+ADMIN_ID = 6172153716  # آيدي الأدمن لاستقبال طلبات السحب
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -66,10 +67,9 @@ def get_crypto_price(symbol):
     except:
         return None
 
-# --- مهمة معالجة الرهان الخلفية ---
+# --- مهمة معالجة الرهان الخلفية (30 ثانية) ---
 async def process_bet(context, user_id, symbol, entry_price, direction):
-    # الانتظار لمدة 60 ثانية في الخلفية
-    await asyncio.sleep(60)
+    await asyncio.sleep(30) # تقليل الوقت لـ 30 ثانية
     
     exit_price = get_crypto_price(symbol)
     if exit_price:
@@ -99,10 +99,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         save_user(user_id, update.effective_user.username or "User", 1000, "Not Set")
 
-    # تنسيق الأزرار المطلوب
     keyboard = [
         ['🎮 Bet Now'],
-        ['💼 Wallet', '👤 Account'], # واليت يسار، اكاونت يمين
+        ['💼 Wallet', '👤 Account'],
         ['🏧 Withdraw', '📢 Earn Points']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -126,20 +125,60 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Select a coin:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif text == '💼 Wallet':
-        await update.message.reply_text("Send your TRC20 address:")
+        await update.message.reply_text("Please send your TRC20 wallet address:")
         context.user_data['waiting_for_wallet'] = True
+
+    elif text == '🏧 Withdraw':
+        if user[2] < 10000:
+            await update.message.reply_text(f"❌ Your balance is too low.\nMinimum withdrawal: 10,000 Pts (10 USDT).\nCurrent balance: {user[2]} Pts.")
+        elif user[3] == "Not Set":
+            await update.message.reply_text("❌ You haven't set your TRC20 wallet yet!\nClick on 💼 Wallet to set it.")
+        else:
+            await update.message.reply_text(f"✅ Your balance: {user[2]} Pts.\nPlease enter the amount of points you want to withdraw (Min 10,000):")
+            context.user_data['waiting_for_withdraw_amount'] = True
 
     elif text == '📢 Earn Points':
         bot = await context.bot.get_me()
-        await update.message.reply_text(f"Your link: https://t.me/{bot.username}?start={user_id}")
+        share_link = f"https://t.me/{bot.username}?start={user_id}"
+        msg = (f"📢 *Referral Program*\n\n"
+               f"Invite your friends and earn *100 Points* for every new user!\n\n"
+               f"Your link: `{share_link}`")
+        await update.message.reply_text(msg, parse_mode='Markdown')
 
+    # معالجة إدخال المحفظة
     elif context.user_data.get('waiting_for_wallet'):
         conn = sqlite3.connect('bot_data.db')
         conn.execute("UPDATE users SET wallet = ? WHERE id = ?", (text, user_id))
         conn.commit()
         conn.close()
         context.user_data['waiting_for_wallet'] = False
-        await update.message.reply_text("✅ Wallet Saved!")
+        await update.message.reply_text("✅ Wallet Saved Successfully!")
+
+    # معالجة إدخال مبلغ السحب
+    elif context.user_data.get('waiting_for_withdraw_amount'):
+        try:
+            amount = int(text)
+            if amount < 10000:
+                await update.message.reply_text("❌ Minimum withdrawal is 10,000 Points.")
+            elif amount > user[2]:
+                await update.message.reply_text("❌ Insufficient balance!")
+            else:
+                # خصم الرصيد وإرسال طلب للأدمن
+                update_balance(user_id, -amount)
+                context.user_data['waiting_for_withdraw_amount'] = False
+                
+                # إشعار للمستخدم
+                await update.message.reply_text(f"✅ Your withdrawal request for {amount} Pts ({amount/1000} USDT) has been sent to the admin.")
+                
+                # إرسال للأدمن
+                admin_msg = (f"🔔 *New Withdrawal Request*\n\n"
+                             f"👤 User: @{user[1]}\n"
+                             f"🆔 ID: `{user[0]}`\n"
+               f"💰 Amount: {amount} Pts (${amount/1000} USDT)\n"
+                             f"🏦 Wallet (TRC20): `{user[3]}`")
+                await context.bot.send_message(ADMIN_ID, admin_msg, parse_mode='Markdown')
+        except ValueError:
+            await update.message.reply_text("❌ Please enter a valid number.")
 
 async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -153,16 +192,14 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data.update({'coin': symbol, 'price': price})
         keyboard = [[InlineKeyboardButton("📈 UP", callback_data="dir_up"), InlineKeyboardButton("📉 DOWN", callback_data="dir_down")]]
-        await query.edit_message_text(f"{symbol}: ${price:.4f}\nPredict 60s direction:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(f"{symbol}: ${price:.4f}\nPredict 30s direction:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data.startswith("dir_"):
         direction = query.data.split("_")[1]
         symbol = context.user_data['coin']
         price = context.user_data['price']
         
-        await query.edit_message_text(f"⏳ Bet active: {symbol} {direction.upper()}\nWait 60s...")
-        
-        # إنشاء مهمة خلفية لضمان عدم ضياع النتيجة
+        await query.edit_message_text(f"⏳ Bet active: {symbol} {direction.upper()}\nWait 30s...")
         asyncio.create_task(process_bet(context, query.from_user.id, symbol, price, direction))
 
 if __name__ == '__main__':
