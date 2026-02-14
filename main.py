@@ -1,6 +1,7 @@
 import os
 import requests
 import logging
+import sqlite3
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
@@ -17,99 +18,117 @@ CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
 WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com" 
 PORT = int(os.environ.get('PORT', 5000))
 
-# تفعيل تسجيل الأخطاء (Logs) لمراقبة الأداء في Render
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-users_db = {}
-CRYPTO_LIST = ['BTC', 'ETH', 'BNB', 'SOL', 'ADA', 'XRP', 'DOT', 'DOGE', 'AVAX', 'MATIC']
+# --- إدارة قاعدة البيانات SQLite ---
+def init_db():
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (id INTEGER PRIMARY KEY, username TEXT, balance INTEGER, wallet TEXT)''')
+    conn.commit()
+    conn.close()
 
+def get_user(user_id):
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE id=?", (user_id,))
+    user = c.fetchone()
+    conn.close()
+    return user
+
+def save_user(user_id, username, balance, wallet):
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?, ?)", (user_id, username, balance, wallet))
+    conn.commit()
+    conn.close()
+
+def update_balance(user_id, amount):
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+# --- جلب السعر (حل مشكلة CMC) ---
 def get_crypto_price(symbol):
     try:
         url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        parameters = {'symbol': symbol, 'convert': 'USD'}
+        # التأكد من إرسال الرمز بشكل نظيف
+        parameters = {'symbol': symbol.strip().upper(), 'convert': 'USD'}
         headers = {
             'Accepts': 'application/json',
             'X-CMC_PRO_API_KEY': CMC_API_KEY,
         }
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, params=parameters, timeout=10)
         data = response.json()
         
         if response.status_code == 200:
-            price = data['data'][symbol]['quote']['USD']['price']
+            price = data['data'][symbol.upper()]['quote']['USD']['price']
             return price
         else:
-            logging.error(f"CMC API Error: {data['status']['error_message']}")
+            logging.error(f"CMC Error Details: {data}")
             return None
     except Exception as e:
-        logging.error(f"Fetch Price Exception: {e}")
+        logging.error(f"Price Fetch Exception: {e}")
         return None
 
+# --- معالجات البوت ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    username = update.effective_user.username or "User"
     
-    # نظام الإحالة
-    if user_id not in users_db:
+    user = get_user(user_id)
+    if not user:
+        # نظام الإحالة
         if context.args:
             try:
-                referrer_id = int(context.args[0])
-                if referrer_id in users_db and referrer_id != user_id:
-                    users_db[referrer_id]['balance'] += 100
-                    await context.bot.send_message(referrer_id, "🎁 Someone joined using your link! +100 Points.")
+                ref_id = int(context.args[0])
+                if get_user(ref_id) and ref_id != user_id:
+                    update_balance(ref_id, 100)
+                    await context.bot.send_message(ref_id, "🎁 Referral Bonus! +100 Points.")
             except: pass
         
-        users_db[user_id] = {
-            'username': update.effective_user.username or "User",
-            'balance': 1000,
-            'wallet': 'Not Set',
-            'id': user_id
-        }
+        save_user(user_id, username, 1000, "Not Set")
 
-    # تم إزالة زر Add Funds
     keyboard = [['🏧 Withdraw'], ['👤 Account', '💼 Wallet'], ['🎮 Bet Now', '📢 Earn Points']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text("Welcome to TG Stars Saving! 🚀\nChoose an option from below:", reply_markup=reply_markup)
+    await update.message.reply_text("Welcome to TG Stars Saving! 🚀", reply_markup=reply_markup)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
-    user = users_db.get(user_id)
-    if not user: return
+    user_data = get_user(user_id)
+    if not user_data: return
 
     if text == '👤 Account':
-        msg = (f"👤 *Account Info*\n\n"
-               f"ID: `{user['id']}`\n"
-               f"Username: @{user['username']}\n"
-               f"Balance: {user['balance']} Points\n"
-               f"Value: ${user['balance']/1000} USDT\n"
-               f"Wallet: `{user['wallet']}`")
+        # user_data index: 0=id, 1=username, 2=balance, 3=wallet
+        msg = (f"👤 *Account Info*\n\nID: `{user_data[0]}`\n"
+               f"Balance: {user_data[2]} Pts (${user_data[2]/1000} USDT)\n"
+               f"Wallet: `{user_data[3]}`")
         await update.message.reply_text(msg, parse_mode='Markdown')
 
     elif text == '🎮 Bet Now':
-        keyboard = [[InlineKeyboardButton(c, callback_data=f"bet_{c}")] for c in CRYPTO_LIST]
-        await update.message.reply_text("Select a coin to bet on (60s):", reply_markup=InlineKeyboardMarkup(keyboard))
+        coins = ['BTC', 'ETH', 'BNB', 'SOL', 'ADA', 'XRP', 'DOT', 'DOGE', 'AVAX', 'MATIC']
+        keyboard = [[InlineKeyboardButton(c, callback_data=f"bet_{c}")] for c in coins]
+        await update.message.reply_text("Select a coin (60s):", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif text == '💼 Wallet':
-        await update.message.reply_text("Please send your TRC20 wallet address:")
+        await update.message.reply_text("Send your TRC20 address:")
         context.user_data['waiting_for_wallet'] = True
-
-    elif text == '🏧 Withdraw':
-        if user['balance'] < 10000:
-            await update.message.reply_text("❌ Minimum withdrawal is 10,000 Points (10 USDT).")
-        elif user['wallet'] == 'Not Set':
-            await update.message.reply_text("❌ Please set your wallet address first via 'Wallet' button.")
-        else:
-            user['balance'] -= 10000
-            await update.message.reply_text("✅ Withdrawal request for 10 USDT has been submitted!")
 
     elif text == '📢 Earn Points':
         bot_info = await context.bot.get_me()
-        link = f"https://t.me/{bot_info.username}?start={user_id}"
-        await update.message.reply_text(f"Share your link to earn 100 points per user:\n`{link}`", parse_mode='Markdown')
+        await update.message.reply_text(f"Your link: https://t.me/{bot_info.username}?start={user_id}")
 
     elif context.user_data.get('waiting_for_wallet'):
-        user['wallet'] = text
+        conn = sqlite3.connect('bot_data.db')
+        conn.execute("UPDATE users SET wallet = ? WHERE id = ?", (text, user_id))
+        conn.commit()
+        conn.close()
         context.user_data['waiting_for_wallet'] = False
-        await update.message.reply_text(f"✅ Wallet updated successfully!")
+        await update.message.reply_text("✅ Wallet Saved!")
 
 async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -119,67 +138,39 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbol = query.data.split("_")[1]
         price = get_crypto_price(symbol)
         if price is None:
-            await query.edit_message_text(f"❌ Error fetching {symbol} price. Please try again later.")
+            await query.edit_message_text("❌ Price Error. Try again.")
             return
         
-        context.user_data['bet_coin'] = symbol
-        context.user_data['entry_price'] = price
-        
+        context.user_data.update({'bet_coin': symbol, 'entry_price': price})
         keyboard = [[InlineKeyboardButton("📈 UP", callback_data="dir_up"), 
                      InlineKeyboardButton("📉 DOWN", callback_data="dir_down")]]
-        await query.edit_message_text(f"Target: {symbol}\nCurrent Price: ${price:.4f}\n\nPredict price after 60s:", 
-                                     reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(f"{symbol}: ${price:.4f}\nPredict 60s direction:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data.startswith("dir_"):
         direction = query.data.split("_")[1]
-        symbol = context.user_data.get('bet_coin')
-        entry_price = context.user_data.get('entry_price')
-        user_id = query.from_user.id
-
-        await query.edit_message_text(f"⏳ Bet active: {symbol} going {direction.upper()}\nEntry: ${entry_price:.4f}\nResult in 60 seconds...")
+        symbol = context.user_data['bet_coin']
+        entry_price = context.user_data['entry_price']
         
-        context.job_queue.run_once(
-            check_bet_result, 
-            60, 
-            data={'uid': user_id, 'symbol': symbol, 'entry': entry_price, 'dir': direction},
-            chat_id=user_id
-        )
+        await query.edit_message_text(f"⏳ Bet on {symbol} {direction.upper()}...\nResult in 60s.")
+        context.job_queue.run_once(check_bet_result, 60, 
+            data={'uid': query.from_user.id, 'symbol': symbol, 'entry': entry_price, 'dir': direction})
 
 async def check_bet_result(context: ContextTypes.DEFAULT_TYPE):
     data = context.job.data
     exit_price = get_crypto_price(data['symbol'])
-    user = users_db.get(data['uid'])
     
-    if exit_price is None:
-        await context.bot.send_message(data['uid'], "⚠️ Error getting final price. Bet cancelled, balance unchanged.")
-        return
-
-    win = False
-    if data['dir'] == "up" and exit_price > data['entry']: win = True
-    elif data['dir'] == "down" and exit_price < data['entry']: win = True
-
-    if win:
-        user['balance'] += 100
-        status = "🎉 WIN! +100 Points."
-    else:
-        user['balance'] -= 100
-        status = "❌ LOST! -100 Points."
-
-    await context.bot.send_message(
-        data['uid'], 
-        f"📊 Bet Result ({data['symbol']}):\nEntry: ${data['entry']:.4f}\nExit: ${exit_price:.4f}\n\n{status}"
-    )
+    if exit_price:
+        win = (data['dir'] == "up" and exit_price > data['entry']) or (data['dir'] == "down" and exit_price < data['entry'])
+        amount = 100 if win else -100
+        update_balance(data['uid'], amount)
+        res = "🎉 WIN! +100" if win else "❌ LOSS! -100"
+        await context.bot.send_message(data['uid'], f"📊 {data['symbol']} Result:\nEntry: {data['entry']:.4f}\nExit: {exit_price:.4f}\n\n{res}")
 
 if __name__ == '__main__':
+    init_db() # تشغيل قاعدة البيانات
     application = Application.builder().token(TOKEN).build()
-    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
 
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
-    )
+    application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"{WEBHOOK_URL}/{TOKEN}")
