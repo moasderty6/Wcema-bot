@@ -98,10 +98,10 @@ async def process_bet(context, user_id, symbol, entry_price, direction):
     exit_price = get_crypto_price(symbol)
     if exit_price:
         win = (direction == "up" and exit_price > entry_price) or (direction == "down" and exit_price < entry_price)
-        amount = 500 if win else -500 
+        amount = 200 if win else -200 
         update_balance(user_id, amount)
         
-        status = "🟢 WINNER! +500 Pts" if win else "🔴 LOSS! -500 Pts"
+        status = "🟢 WINNER! +200 Pts" if win else "🔴 LOSS! -200 Pts"
         msg = (f"🏆 <b>{symbol} Trade Result</b>\n"
                f"━━━━━━━━━━━━━━\n"
                f"📉 Entry: <code>${entry_price:.4f}</code>\n"
