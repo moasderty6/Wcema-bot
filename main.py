@@ -139,7 +139,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
-        return # تجاهل إذا لم يكن الأدمن
+        return 
 
     conn = get_db_connection()
     c = conn.cursor()
@@ -154,8 +154,8 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (f"📊 <b>Bybit Moonbix Stats</b>\n"
            f"━━━━━━━━━━━━━━\n"
            f"👥 Total Users: <b>{total_users}</b>\n"
-               f"💰 Total Points: <b>{total_balance:,} Pts</b>\n"
-               f"💵 Total Value: <b>${total_balance/1000:,.2f} USDT</b>")
+           f"💰 Total Points: <b>{total_balance:,} Pts</b>\n"
+           f"💵 Total Value: <b>${total_balance/1000:,.2f} USDT</b>")
     await update.message.reply_text(msg, parse_mode='HTML')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -174,6 +174,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode='HTML')
 
     elif text == '🎮 Bet Now':
+        # تحقق من الرصيد قبل السماح باللعب
+        if user[2] < 200:
+            bot_info = await context.bot.get_me()
+            share_link = f"https://t.me/{bot_info.username}?start={user_id}"
+            await update.message.reply_text(
+                f"❌ <b>نظام الحماية:</b>\n\nرصيدك غير كافٍ للعب (تحتاج 200 نقطة على الأقل).\n\n"
+                f"قم بدعوة أصدقائك لكسب المزيد من النقاط والاستمرار في الرحلة! 🚀\n\n"
+                f"🔗 رابط الدعوة الخاص بك:\n{share_link}",
+                parse_mode='HTML'
+            )
+            return
+
         coins = ['BTC', 'ETH', 'BNB', 'SOL', 'TON', 'XRP', 'DOT', 'DOGE', 'AVAX', 'ADA']
         keyboard = [[InlineKeyboardButton(f"🪙 {c}", callback_data=f"bet_{c}")] for c in coins]
         await update.message.reply_text("✨ <b>Choose your Asset:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
@@ -230,7 +242,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id
+    user = get_user(user_id)
+    
     await query.answer()
+    
+    # تحقق إضافي داخل الـ Callback لضمان عدم التلاعب
+    if user[2] < 200:
+        await query.edit_message_text("❌ رصيدك نفذ! يرجى دعوة أصدقاء لكسب النقاط.")
+        return
+
     if query.data.startswith("bet_"):
         symbol = query.data.split("_")[1]
         price = get_crypto_price(symbol)
@@ -251,7 +272,7 @@ if __name__ == '__main__':
     init_db()
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("stats", admin_stats)) # الأمر الجديد للأدمن
+    application.add_handler(CommandHandler("stats", admin_stats))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
     application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"{WEBHOOK_URL}/{TOKEN}")
