@@ -1,7 +1,6 @@
 import os
 import requests
 import logging
-from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
@@ -12,16 +11,15 @@ from telegram.ext import (
     CallbackQueryHandler
 )
 
-# --- الإعدادات (استبدلها بالقيم الحقيقية أو استخدم Environment Variables) ---
+# --- الإعدادات ---
 TOKEN = "7793678424:AAH7mXshTdQ4RjynCh-VyzGZAzWtDSSkiFM"
 CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
-WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com" # رابط تطبيقك على ريندر
+WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com" 
 PORT = int(os.environ.get('PORT', 5000))
 
-# إعداد Flask للويب هوك
-server = Flask(__name__)
+# تفعيل تسجيل الأخطاء (Logs) لمراقبة الأداء في Render
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# قاعدة بيانات وهمية (استخدم DB حقيقية في المشروع الفعلي)
 users_db = {}
 CRYPTO_LIST = ['BTC', 'ETH', 'BNB', 'SOL', 'ADA', 'XRP', 'DOT', 'DOGE', 'AVAX', 'MATIC']
 
@@ -29,27 +27,35 @@ def get_crypto_price(symbol):
     try:
         url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
         parameters = {'symbol': symbol, 'convert': 'USD'}
-        headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': CMC_API_KEY}
-        response = requests.get(url, headers=headers).json()
-        return response['data'][symbol]['quote']['USD']['price']
-    except:
+        headers = {
+            'Accepts': 'application/json',
+            'X-CMC_PRO_API_KEY': CMC_API_KEY,
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        data = response.json()
+        
+        if response.status_code == 200:
+            price = data['data'][symbol]['quote']['USD']['price']
+            return price
+        else:
+            logging.error(f"CMC API Error: {data['status']['error_message']}")
+            return None
+    except Exception as e:
+        logging.error(f"Fetch Price Exception: {e}")
         return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # نظام الإحالة (Referral System)
-    is_new_user = user_id not in users_db
-    if is_new_user:
-        referrer_id = None
+    # نظام الإحالة
+    if user_id not in users_db:
         if context.args:
             try:
                 referrer_id = int(context.args[0])
                 if referrer_id in users_db and referrer_id != user_id:
                     users_db[referrer_id]['balance'] += 100
                     await context.bot.send_message(referrer_id, "🎁 Someone joined using your link! +100 Points.")
-            except ValueError:
-                pass
+            except: pass
         
         users_db[user_id] = {
             'username': update.effective_user.username or "User",
@@ -58,7 +64,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'id': user_id
         }
 
-    keyboard = [['🌟 Add Funds', '🏧 Withdraw'], ['👤 Account', '💼 Wallet'], ['🎮 Bet Now', '📢 Earn Points']]
+    # تم إزالة زر Add Funds
+    keyboard = [['🏧 Withdraw'], ['👤 Account', '💼 Wallet'], ['🎮 Bet Now', '📢 Earn Points']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text("Welcome to TG Stars Saving! 🚀\nChoose an option from below:", reply_markup=reply_markup)
 
@@ -95,8 +102,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Withdrawal request for 10 USDT has been submitted!")
 
     elif text == '📢 Earn Points':
-        bot_username = (await context.bot.get_me()).username
-        link = f"https://t.me/{bot_username}?start={user_id}"
+        bot_info = await context.bot.get_me()
+        link = f"https://t.me/{bot_info.username}?start={user_id}"
         await update.message.reply_text(f"Share your link to earn 100 points per user:\n`{link}`", parse_mode='Markdown')
 
     elif context.user_data.get('waiting_for_wallet'):
@@ -111,8 +118,8 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data.startswith("bet_"):
         symbol = query.data.split("_")[1]
         price = get_crypto_price(symbol)
-        if not price:
-            await query.edit_message_text("Error fetching price. Try again.")
+        if price is None:
+            await query.edit_message_text(f"❌ Error fetching {symbol} price. Please try again later.")
             return
         
         context.user_data['bet_coin'] = symbol
@@ -125,13 +132,12 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("dir_"):
         direction = query.data.split("_")[1]
-        symbol = context.user_data['bet_coin']
-        entry_price = context.user_data['entry_price']
+        symbol = context.user_data.get('bet_coin')
+        entry_price = context.user_data.get('entry_price')
         user_id = query.from_user.id
 
         await query.edit_message_text(f"⏳ Bet active: {symbol} going {direction.upper()}\nEntry: ${entry_price:.4f}\nResult in 60 seconds...")
         
-        # استخدام JobQueue بدلاً من sleep لعدم تعطيل البوت
         context.job_queue.run_once(
             check_bet_result, 
             60, 
@@ -140,14 +146,17 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def check_bet_result(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    data = job.data
+    data = context.job.data
     exit_price = get_crypto_price(data['symbol'])
     user = users_db.get(data['uid'])
     
+    if exit_price is None:
+        await context.bot.send_message(data['uid'], "⚠️ Error getting final price. Bet cancelled, balance unchanged.")
+        return
+
     win = False
     if data['dir'] == "up" and exit_price > data['entry']: win = True
-    if data['dir'] == "down" and exit_price < data['entry']: win = True
+    elif data['dir'] == "down" and exit_price < data['entry']: win = True
 
     if win:
         user['balance'] += 100
@@ -161,36 +170,16 @@ async def check_bet_result(context: ContextTypes.DEFAULT_TYPE):
         f"📊 Bet Result ({data['symbol']}):\nEntry: ${data['entry']:.4f}\nExit: ${exit_price:.4f}\n\n{status}"
     )
 
-# --- Flask & Webhook Logic ---
-@server.route('/webhook', methods=['POST'])
-def webhook_handler():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        application.update_queue.put(update)
-    return "OK"
-
-@server.route('/')
-def index():
-    return "Bot is Running!"
-
-# --- تشغيل البوت ---
-
 if __name__ == '__main__':
-    # بناء تطبيق التليجرام
-    # ملاحظة: أضفنا الـ JobQueue هنا ليعمل نظام المراهنة
     application = Application.builder().token(TOKEN).build()
     
-    # إضافة الأوامر والمقابض
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
 
-    # تشغيل الويب هوك
-    # المكتبة ستتولى أمر set_webhook تلقائياً
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path=TOKEN, # نستخدم التوكن كمسار أمان
+        url_path=TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
     )
-
