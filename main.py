@@ -13,9 +13,9 @@ from telegram.ext import (
 )
 
 # --- الإعدادات (استبدلها بالقيم الحقيقية أو استخدم Environment Variables) ---
-TOKEN = "YOUR_TELEGRAM_TOKEN"
-CMC_API_KEY = "YOUR_CMC_API_KEY"
-WEBHOOK_URL = "https://your-app-name.onrender.com/webhook" # رابط تطبيقك على ريندر
+TOKEN = "7793678424:AAH7mXshTdQ4RjynCh-VyzGZAzWtDSSkiFM"
+CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
+WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com/webhook" # رابط تطبيقك على ريندر
 PORT = int(os.environ.get('PORT', 5000))
 
 # إعداد Flask للويب هوك
