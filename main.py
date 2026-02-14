@@ -131,7 +131,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
-        f"🌕 <b>Welcome to Bybit Moonbix!</b>\n\nExplore the galaxy of crypto and earn points by predicting the market moves. 🚀",
+        f"🌕 <b>Welcome to Binance Moonbix!</b>\n\nExplore the galaxy of crypto and earn points by predicting the market moves. 🚀",
         reply_markup=reply_markup, parse_mode='HTML'
     )
 
@@ -151,7 +151,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_users = stats[0] or 0
     total_balance = stats[1] or 0
     
-    msg = (f"📊 <b>Bybit Moonbix Stats</b>\n"
+    msg = (f"📊 <b>Binance Moonbix Stats</b>\n"
            f"━━━━━━━━━━━━━━\n"
            f"👥 Total Users: <b>{total_users}</b>\n"
            f"💰 Total Points: <b>{total_balance:,} Pts</b>\n"
