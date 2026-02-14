@@ -151,7 +151,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                f"🆔 ID: <code>{user[0]}</code>\n"
                f"💰 Balance: <b>{user[2]:,} Pts</b>\n"
                f"💵 Value: <b>${user[2]/1000:.2f} USDT</b>\n"
-               f"🏦 Wallet: <code>{user[3]}</code>")
+               f"🏦 Wallet(TRC20): <code>{user[3]}</code>")
         await update.message.reply_text(msg, parse_mode='HTML')
 
     elif text == '🎮 Bet Now':
