@@ -2,6 +2,7 @@ import os
 import requests
 import logging
 import sqlite3
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
@@ -20,7 +21,7 @@ PORT = int(os.environ.get('PORT', 5000))
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- قاعدة البيانات ---
+# --- إدارة قاعدة البيانات ---
 def init_db():
     conn = sqlite3.connect('bot_data.db')
     c = conn.cursor()
@@ -62,7 +63,8 @@ def get_crypto_price(symbol):
         if response.status_code == 200:
             return data['data'][symbol.upper()]['quote']['USD']['price']
         return None
-    except:
+    except Exception as e:
+        logging.error(f"Price Error: {e}")
         return None
 
 # --- المعالجات ---
@@ -80,11 +82,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         save_user(user_id, username, 1000, "Not Set")
 
-    # تعديل ترتيب الأزرار ليكون Bet Now في الأعلى وكبير
+    # ترتيب الأزرار الجديد
     keyboard = [
-        ['🎮 Bet Now'], 
-        ['🏧 Withdraw', '📢 Earn Points'],
-        ['👤 Account', '💼 Wallet']
+        ['🎮 Bet Now'],
+        ['👤 Account', '💼 Wallet'],
+        ['🏧 Withdraw', '📢 Earn Points']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text("Welcome to TG Stars Saving! 🚀", reply_markup=reply_markup)
@@ -136,7 +138,7 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.update({'bet_coin': symbol, 'entry_price': price})
         keyboard = [[InlineKeyboardButton("📈 UP", callback_data="dir_up"), 
                      InlineKeyboardButton("📉 DOWN", callback_data="dir_down")]]
-        await query.edit_message_text(f"{symbol}: ${price:.4f}\nPredict 10s direction:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(f"{symbol}: ${price:.4f}\nPredict 60s direction:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data.startswith("dir_"):
         direction = query.data.split("_")[1]
@@ -144,14 +146,13 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entry_price = context.user_data.get('entry_price')
         user_id = query.from_user.id
         
-        await query.edit_message_text(f"⏳ Bet on {symbol} {direction.upper()}...\nResult in 10s.")
+        await query.edit_message_text(f"⏳ Bet on {symbol} {direction.upper()}...\nResult in 60s.")
         
-        # التأكد من تمرير البيانات للـ Job بشكل صحيح
-        context.job_queue.run_once(
+        # استخدام دالة الجدولة مع التأكد من تشغيلها
+        context.application.job_queue.run_once(
             check_bet_result, 
-            10, 
-            data={'uid': user_id, 'symbol': symbol, 'entry': entry_price, 'dir': direction},
-            chat_id=query.message.chat_id
+            60, 
+            data={'uid': user_id, 'symbol': symbol, 'entry': entry_price, 'dir': direction}
         )
 
 async def check_bet_result(context: ContextTypes.DEFAULT_TYPE):
@@ -160,10 +161,7 @@ async def check_bet_result(context: ContextTypes.DEFAULT_TYPE):
     exit_price = get_crypto_price(data['symbol'])
     
     if exit_price:
-        win = False
-        if data['dir'] == "up" and exit_price > data['entry']: win = True
-        elif data['dir'] == "down" and exit_price < data['entry']: win = True
-        
+        win = (data['dir'] == "up" and exit_price > data['entry']) or (data['dir'] == "down" and exit_price < data['entry'])
         amount = 100 if win else -100
         update_balance(data['uid'], amount)
         
@@ -175,21 +173,21 @@ async def check_bet_result(context: ContextTypes.DEFAULT_TYPE):
         
         await context.bot.send_message(data['uid'], final_msg, parse_mode='Markdown')
     else:
-        await context.bot.send_message(data['uid'], "⚠️ Error fetching final price. Balance not changed.")
+        await context.bot.send_message(data['uid'], "⚠️ Error fetching final price.")
 
 if __name__ == '__main__':
     init_db()
-    # بناء التطبيق مع تفعيل الـ JobQueue تلقائياً
+    # بناء التطبيق مع JobQueue
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
 
-    # تشغيل الويب هوك
+    # بدء الويب هوك
     application.run_webhook(
-        listen="0.0.0.0", 
-        port=PORT, 
-        url_path=TOKEN, 
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
     )
