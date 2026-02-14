@@ -179,9 +179,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bot_info = await context.bot.get_me()
             share_link = f"https://t.me/{bot_info.username}?start={user_id}"
             await update.message.reply_text(
-                f"❌ <b>نظام الحماية:</b>\n\nرصيدك غير كافٍ للعب (تحتاج 200 نقطة على الأقل).\n\n"
-                f"قم بدعوة أصدقائك لكسب المزيد من النقاط والاستمرار في الرحلة! 🚀\n\n"
-                f"🔗 رابط الدعوة الخاص بك:\n{share_link}",
+                f"❌ <b>Insufficient Balance:</b>\n\nYour balance is insufficient to play (Minimum 200 Pts required).\n\n"
+                f"Invite your friends to earn more points and continue the journey! 🚀\n\n"
+                f"🔗 Your Referral Link:\n{share_link}",
                 parse_mode='HTML'
             )
             return
