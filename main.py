@@ -265,7 +265,7 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     elif query.data.startswith("dir_"):
         direction = "UP" if query.data.split("_")[1] == "up" else "DOWN"
-        await query.edit_message_text(f"🚀 <b>Trade Executed!</b>\nPosition: {direction}\nWaiting... ⏳", parse_mode='HTML')
+        await query.edit_message_text(f"🚀 <b>Trade Executed!</b>\nPosition: {direction}\nWaiting (30s)... ⏳", parse_mode='HTML')
         asyncio.create_task(process_bet(context, query.from_user.id, context.user_data['coin'], context.user_data['price'], query.data.split("_")[1]))
 
 if __name__ == '__main__':
