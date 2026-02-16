@@ -13,13 +13,13 @@ from telegram.ext import (
     CallbackQueryHandler
 )
 
-# --- الإعدادات ---
-TOKEN = "7793678424:AAH7mXshTdQ4RjynCh-VyzGZAzWtDSSkiFM"
-# تم استبدال CMC بـ Binance API الأساسي
+# --- الإعدادات (جلب البيانات من متغيرات البيئة في ريندر) ---
+TOKEN = os.environ.get('BOT_TOKEN')
+CMC_API_KEY = os.environ.get('CMC_API_KEY')
+DATABASE_URL = os.environ.get('DATABASE_URL')
 WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com" 
 PORT = int(os.environ.get('PORT', 5000))
 ADMIN_ID = 6172153716 
-DATABASE_URL = "postgresql://neondb_owner:npg_txJFdgkvBH35@ep-icy-forest-aia1n447-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -77,54 +77,41 @@ def update_balance(user_id, amount):
     c.close()
     conn.close()
 
-# --- جلب السعر اللحظي من Binance ---
-# --- جلب السعر اللحظي من Binance مع نظام النسخ الاحتياطي ---
+# --- جلب السعر اللحظي ---
 def get_crypto_price(symbol):
-    # قائمة بروابط بايننس المختلفة لضمان العمل في حال تم حظر أحدها
-    endpoints = [
-        "https://api1.binance.com",
-        "https://api.binance.com",
-        "https://api2.binance.com",
-        "https://api3.binance.com"
-    ]
-    
-    ticker = f"{symbol.strip().upper()}USDT"
-    
-    for base_url in endpoints:
-        try:
-            url = f"{base_url}/api/v3/ticker/price?symbol={ticker}"
-            response = requests.get(url, timeout=5)
-            # إذا كانت الاستجابة ناجحة (كود 200)
-            if response.status_code == 200:
-                data = response.json()
-                if 'price' in data:
-                    return float(data['price'])
-            else:
-                logging.error(f"Binance {base_url} returned status: {response.status_code}")
-                continue # جرب الرابط التالي
-        except Exception as e:
-            logging.error(f"Error connecting to {base_url}: {e}")
-            continue
-            
-    return None # إذا فشلت كل المحاولات
+    try:
+        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        parameters = {'symbol': symbol.strip().upper(), 'convert': 'USD'}
+        headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': CMC_API_KEY}
+        response = requests.get(url, headers=headers, params=parameters, timeout=10)
+        data = response.json()
+        return data['data'][symbol.upper()]['quote']['USD']['price']
+    except:
+        return None
 
-
-# --- معالجة الرهان (30 ثانية) ---
+# --- معالجة الرهان (30 ثانية) مع منطق التعادل ---
 async def process_bet(context, user_id, symbol, entry_price, direction):
     await asyncio.sleep(30)
     exit_price = get_crypto_price(symbol)
-    if exit_price:
-        win = (direction == "up" and exit_price > entry_price) or (direction == "down" and exit_price < entry_price)
-        amount = 200 if win else -200 
-        update_balance(user_id, amount)
-        
-        status = "🟢 WINNER! +200 Pts" if win else "🔴 LOSS! -200 Pts"
+    if exit_price is not None:
+        # حالة التعادل: السعر لم يتغير
+        if exit_price == entry_price:
+            status = "🟡 DRAW! Price stayed the same."
+            result_text = "Points have been returned to your balance."
+        else:
+            win = (direction == "up" and exit_price > entry_price) or (direction == "down" and exit_price < entry_price)
+            amount = 200 if win else -200 
+            update_balance(user_id, amount)
+            status = "🟢 WINNER! +200 Pts" if win else "🔴 LOSS! -200 Pts"
+            result_text = "Prediction completed."
+
         msg = (f"🏆 <b>{symbol} Trade Result</b>\n"
                f"━━━━━━━━━━━━━━\n"
                f"📉 Entry: <code>${entry_price:.4f}</code>\n"
                f"📈 Exit: <code>${exit_price:.4f}</code>\n"
                f"━━━━━━━━━━━━━━\n"
-               f"<b>{status}</b>")
+               f"<b>{status}</b>\n"
+               f"{result_text}")
         await context.bot.send_message(user_id, msg, parse_mode='HTML')
     else:
         await context.bot.send_message(user_id, "⚠️ Network Error. Points returned.")
@@ -194,7 +181,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode='HTML')
 
     elif text == '🎮 Bet Now':
-        # تحقق من الرصيد قبل السماح باللعب
         if user[2] < 200:
             bot_info = await context.bot.get_me()
             share_link = f"https://t.me/{bot_info.username}?start={user_id}"
@@ -267,7 +253,6 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.answer()
     
-    # تحقق إضافي داخل الـ Callback لضمان عدم التلاعب
     if user[2] < 200:
         await query.edit_message_text("❌ رصيدك نفذ! يرجى دعوة أصدقاء لكسب النقاط.")
         return
@@ -276,7 +261,7 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbol = query.data.split("_")[1]
         price = get_crypto_price(symbol)
         if not price:
-            await query.edit_message_text("❌ Data error (Binance API). Try again.")
+            await query.edit_message_text("❌ Data error. Try another coin.")
             return
         context.user_data.update({'coin': symbol, 'price': price})
         keyboard = [[InlineKeyboardButton("📈 BULLISH (UP)", callback_data="dir_up"), 
@@ -284,9 +269,9 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"🪙 <b>{symbol} Market</b>\nPrice: <code>${price:.4f}</code>\n\nPredict 30s move:", 
                                      reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     elif query.data.startswith("dir_"):
-        direction = "UP" if query.data.split("_")[1] == "up" else "DOWN"
-        await query.edit_message_text(f"🚀 <b>Trade Executed!</b>\nPosition: {direction}\nWaiting (30s)... ⏳", parse_mode='HTML')
-        asyncio.create_task(process_bet(context, query.from_user.id, context.user_data['coin'], context.user_data['price'], query.data.split("_")[1]))
+        direction = "up" if query.data.split("_")[1] == "up" else "down"
+        await query.edit_message_text(f"🚀 <b>Trade Executed!</b>\nPosition: {direction.upper()}\nWaiting (30s)... ⏳", parse_mode='HTML')
+        asyncio.create_task(process_bet(context, query.from_user.id, context.user_data['coin'], context.user_data['price'], direction))
 
 if __name__ == '__main__':
     init_db()
