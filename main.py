@@ -13,13 +13,12 @@ from telegram.ext import (
     CallbackQueryHandler
 )
 
-# --- الإعدادات ---
-TOKEN = "7793678424:AAH7mXshTdQ4RjynCh-VyzGZAzWtDSSkiFM"
-CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
-WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com" 
+# --- الإعدادات (باستخدام متغيرات البيئة لـ Render) ---
+TOKEN = os.environ.get('BOT_TOKEN')
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL') 
 PORT = int(os.environ.get('PORT', 5000))
+DATABASE_URL = os.environ.get('DATABASE_URL')
 ADMIN_ID = 6172153716 
-DATABASE_URL = "postgresql://neondb_owner:npg_txJFdgkvBH35@ep-icy-forest-aia1n447-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -36,6 +35,7 @@ def init_db():
                   balance INTEGER DEFAULT 1000, 
                   wallet TEXT DEFAULT 'Not Set')''')
     
+    # حساب تجريبي (Tester)
     c.execute("""
         INSERT INTO users (id, username, balance, wallet) 
         VALUES (565965404, 'Tester', 100000, 'Not Set') 
@@ -77,34 +77,49 @@ def update_balance(user_id, amount):
     c.close()
     conn.close()
 
-# --- جلب السعر اللحظي ---
+# --- جلب السعر اللحظي من Binance ---
 def get_crypto_price(symbol):
     try:
-        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        parameters = {'symbol': symbol.strip().upper(), 'convert': 'USD'}
-        headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': CMC_API_KEY}
-        response = requests.get(url, headers=headers, params=parameters, timeout=10)
+        # تحويل الرمز لصيغة بينانس (مثال: BTCUSDT)
+        ticker = f"{symbol.strip().upper()}USDT"
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={ticker}"
+        response = requests.get(url, timeout=5)
         data = response.json()
-        return data['data'][symbol.upper()]['quote']['USD']['price']
-    except:
+        if 'price' in data:
+            return float(data['price'])
+        return None
+    except Exception as e:
+        logging.error(f"Binance Error: {e}")
         return None
 
 # --- معالجة الرهان (30 ثانية) ---
 async def process_bet(context, user_id, symbol, entry_price, direction):
     await asyncio.sleep(30)
     exit_price = get_crypto_price(symbol)
-    if exit_price:
-        win = (direction == "up" and exit_price > entry_price) or (direction == "down" and exit_price < entry_price)
-        amount = 200 if win else -200 
-        update_balance(user_id, amount)
+    
+    if exit_price is not None:
+        # حالة التعادل: إذا لم يتغير السعر
+        if exit_price == entry_price:
+            status = "🟡 DRAW! Price remained the same."
+            msg = (f"🏆 <b>{symbol} Trade Result</b>\n"
+                   f"━━━━━━━━━━━━━━\n"
+                   f"📉 Entry: <code>${entry_price:.4f}</code>\n"
+                   f"📈 Exit: <code>${exit_price:.4f}</code>\n"
+                   f"━━━━━━━━━━━━━━\n"
+                   f"<b>{status}</b> (Points returned)")
+        else:
+            win = (direction == "up" and exit_price > entry_price) or (direction == "down" and exit_price < entry_price)
+            amount = 200 if win else -200 
+            update_balance(user_id, amount)
+            
+            status = "🟢 WINNER! +200 Pts" if win else "🔴 LOSS! -200 Pts"
+            msg = (f"🏆 <b>{symbol} Trade Result</b>\n"
+                   f"━━━━━━━━━━━━━━\n"
+                   f"📉 Entry: <code>${entry_price:.4f}</code>\n"
+                   f"📈 Exit: <code>${exit_price:.4f}</code>\n"
+                   f"━━━━━━━━━━━━━━\n"
+                   f"<b>{status}</b>")
         
-        status = "🟢 WINNER! +200 Pts" if win else "🔴 LOSS! -200 Pts"
-        msg = (f"🏆 <b>{symbol} Trade Result</b>\n"
-               f"━━━━━━━━━━━━━━\n"
-               f"📉 Entry: <code>${entry_price:.4f}</code>\n"
-               f"📈 Exit: <code>${exit_price:.4f}</code>\n"
-               f"━━━━━━━━━━━━━━\n"
-               f"<b>{status}</b>")
         await context.bot.send_message(user_id, msg, parse_mode='HTML')
     else:
         await context.bot.send_message(user_id, "⚠️ Network Error. Points returned.")
@@ -174,7 +189,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode='HTML')
 
     elif text == '🎮 Bet Now':
-        # تحقق من الرصيد قبل السماح باللعب
         if user[2] < 200:
             bot_info = await context.bot.get_me()
             share_link = f"https://t.me/{bot_info.username}?start={user_id}"
@@ -247,7 +261,6 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.answer()
     
-    # تحقق إضافي داخل الـ Callback لضمان عدم التلاعب
     if user[2] < 200:
         await query.edit_message_text("❌ رصيدك نفذ! يرجى دعوة أصدقاء لكسب النقاط.")
         return
@@ -256,7 +269,7 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbol = query.data.split("_")[1]
         price = get_crypto_price(symbol)
         if not price:
-            await query.edit_message_text("❌ Data error. Try another coin.")
+            await query.edit_message_text("❌ Data error (Binance API). Try again.")
             return
         context.user_data.update({'coin': symbol, 'price': price})
         keyboard = [[InlineKeyboardButton("📈 BULLISH (UP)", callback_data="dir_up"), 
@@ -275,4 +288,11 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("stats", admin_stats))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
-    application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"{WEBHOOK_URL}/{TOKEN}")
+    
+    # تشغيل الـ Webhook
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
+    )
