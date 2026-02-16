@@ -78,18 +78,36 @@ def update_balance(user_id, amount):
     conn.close()
 
 # --- جلب السعر اللحظي من Binance ---
+# --- جلب السعر اللحظي من Binance مع نظام النسخ الاحتياطي ---
 def get_crypto_price(symbol):
-    try:
-        # استخدام أحد روابط بايننس السريعة (api1)
-        ticker = f"{symbol.strip().upper()}USDT"
-        url = f"https://api1.binance.com/api/v3/ticker/price?symbol={ticker}"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if 'price' in data:
-            return float(data['price'])
-        return None
-    except:
-        return None
+    # قائمة بروابط بايننس المختلفة لضمان العمل في حال تم حظر أحدها
+    endpoints = [
+        "https://api1.binance.com",
+        "https://api.binance.com",
+        "https://api2.binance.com",
+        "https://api3.binance.com"
+    ]
+    
+    ticker = f"{symbol.strip().upper()}USDT"
+    
+    for base_url in endpoints:
+        try:
+            url = f"{base_url}/api/v3/ticker/price?symbol={ticker}"
+            response = requests.get(url, timeout=5)
+            # إذا كانت الاستجابة ناجحة (كود 200)
+            if response.status_code == 200:
+                data = response.json()
+                if 'price' in data:
+                    return float(data['price'])
+            else:
+                logging.error(f"Binance {base_url} returned status: {response.status_code}")
+                continue # جرب الرابط التالي
+        except Exception as e:
+            logging.error(f"Error connecting to {base_url}: {e}")
+            continue
+            
+    return None # إذا فشلت كل المحاولات
+
 
 # --- معالجة الرهان (30 ثانية) ---
 async def process_bet(context, user_id, symbol, entry_price, direction):
