@@ -13,13 +13,13 @@ from telegram.ext import (
     CallbackQueryHandler
 )
 
-# --- الإعدادات (جلب البيانات من متغيرات البيئة في ريندر) ---
-TOKEN = os.environ.get('BOT_TOKEN')
-CMC_API_KEY = os.environ.get('CMC_API_KEY')
-DATABASE_URL = os.environ.get('DATABASE_URL')
+# --- الإعدادات ---
+TOKEN = "7793678424:AAH7mXshTdQ4RjynCh-VyzGZAzWtDSSkiFM"
+CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
 WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com" 
 PORT = int(os.environ.get('PORT', 5000))
 ADMIN_ID = 6172153716 
+DATABASE_URL = "postgresql://neondb_owner:npg_txJFdgkvBH35@ep-icy-forest-aia1n447-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -93,25 +93,25 @@ def get_crypto_price(symbol):
 async def process_bet(context, user_id, symbol, entry_price, direction):
     await asyncio.sleep(30)
     exit_price = get_crypto_price(symbol)
-    if exit_price is not None:
-        # حالة التعادل: السعر لم يتغير
+    if exit_price:
+        # منطق التعادل: إذا لم يتغير السعر
         if exit_price == entry_price:
-            status = "🟡 DRAW! Price stayed the same."
-            result_text = "Points have been returned to your balance."
+            status = "🟡 DRAW! Price Unchanged"
+            result_msg = "No points lost. Your balance remains the same. 🤝"
         else:
             win = (direction == "up" and exit_price > entry_price) or (direction == "down" and exit_price < entry_price)
             amount = 200 if win else -200 
             update_balance(user_id, amount)
             status = "🟢 WINNER! +200 Pts" if win else "🔴 LOSS! -200 Pts"
-            result_text = "Prediction completed."
-
+            result_msg = "Market prediction completed."
+        
         msg = (f"🏆 <b>{symbol} Trade Result</b>\n"
                f"━━━━━━━━━━━━━━\n"
                f"📉 Entry: <code>${entry_price:.4f}</code>\n"
                f"📈 Exit: <code>${exit_price:.4f}</code>\n"
                f"━━━━━━━━━━━━━━\n"
                f"<b>{status}</b>\n"
-               f"{result_text}")
+               f"{result_msg}")
         await context.bot.send_message(user_id, msg, parse_mode='HTML')
     else:
         await context.bot.send_message(user_id, "⚠️ Network Error. Points returned.")
@@ -270,7 +270,8 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     elif query.data.startswith("dir_"):
         direction = "up" if query.data.split("_")[1] == "up" else "down"
-        await query.edit_message_text(f"🚀 <b>Trade Executed!</b>\nPosition: {direction.upper()}\nWaiting (30s)... ⏳", parse_mode='HTML')
+        dir_text = "BULLISH (UP)" if direction == "up" else "BEARISH (DOWN)"
+        await query.edit_message_text(f"🚀 <b>Trade Executed!</b>\nPosition: {dir_text}\nWaiting (30s)... ⏳", parse_mode='HTML')
         asyncio.create_task(process_bet(context, query.from_user.id, context.user_data['coin'], context.user_data['price'], direction))
 
 if __name__ == '__main__':
