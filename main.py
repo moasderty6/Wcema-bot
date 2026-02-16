@@ -13,12 +13,15 @@ from telegram.ext import (
     CallbackQueryHandler
 )
 
-# --- الإعدادات (استخدم متغيرات البيئة في Render لضمان الأمان) ---
+# --- الإعدادات (تأكد من إضافتها في Render Environment Variables) ---
 TOKEN = os.environ.get('BOT_TOKEN', "7793678424:AAH7mXshTdQ4RjynCh-VyzGZAzWtDSSkiFM")
 DATABASE_URL = os.environ.get('DATABASE_URL', "postgresql://neondb_owner:npg_txJFdgkvBH35@ep-icy-forest-aia1n447-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require")
 WEBHOOK_URL = os.environ.get('WEBHOOK_URL', "https://wcema-bot-6hga.onrender.com") 
 PORT = int(os.environ.get('PORT', 5000))
 ADMIN_ID = 6172153716 
+
+# استخدام أحد روابط Binance السريعة التي زودتني بها
+BINANCE_BASE_URL = "https://api1.binance.com"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -62,70 +65,81 @@ def update_balance(user_id, amount):
     c.close()
     conn.close()
 
-# --- جلب السعر اللحظي من Binance ---
+# --- جلب السعر اللحظي من Binance API ---
 def get_crypto_price(symbol):
     try:
-        sym = symbol.strip().upper() + "USDT"
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={sym}"
+        ticker = f"{symbol.strip().upper()}USDT"
+        url = f"{BINANCE_BASE_URL}/api/v3/ticker/price?symbol={ticker}"
         response = requests.get(url, timeout=5)
-        return float(response.json()['price'])
-    except: return None
+        data = response.json()
+        return float(data['price'])
+    except Exception as e:
+        logging.error(f"Binance API Error: {e}")
+        return None
 
-# --- معالجة الرهان مع تحديث "لايف" ومنطق التعادل ---
+# --- معالجة الرهان (Live Price + Draw Logic) ---
 async def process_bet(context, user_id, message_id, symbol, entry_price, direction):
-    seconds = 30
-    while seconds > 0:
-        await asyncio.sleep(5) # تحديث كل 5 ثوانٍ
-        seconds -= 5
+    # مرحلة الانتظار مع تحديث لايف للسعر
+    total_time = 30
+    interval = 5
+    
+    for remaining in range(total_time - interval, -1, -interval):
+        await asyncio.sleep(interval)
         current_p = get_crypto_price(symbol)
+        
         if current_p:
-            diff = current_p - entry_price
-            trend = "🟢 Profit" if (direction == "up" and diff > 0) or (direction == "down" and diff < 0) else "🔴 Loss"
-            if diff == 0: trend = "🟡 Neutral"
-            
-            live_msg = (f"🚀 <b>Trade Live: {symbol}</b>\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"📉 Entry: <code>${entry_price:.4f}</code>\n"
-                        f"📊 Live: <code>${current_p:.4f}</code>\n"
-                        f"⏳ Time: {seconds}s\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"Status: <b>{trend}</b>")
+            # تحديد الحالة الحالية (ربح/خسارة/تعادل مؤقت)
+            if current_p == entry_price:
+                status_icon = "🟡 Neutral"
+            elif (direction == "up" and current_p > entry_price) or (direction == "down" and current_p < entry_price):
+                status_icon = "🟢 Profit"
+            else:
+                status_icon = "🔴 Loss"
+
+            live_text = (f"🚀 <b>Trade Live: {symbol}</b>\n"
+                         f"━━━━━━━━━━━━━━\n"
+                         f"📉 Entry: <code>${entry_price:.4f}</code>\n"
+                         f"📊 Live: <code>${current_p:.4f}</code>\n"
+                         f"⏳ Remaining: {remaining}s\n"
+                         f"━━━━━━━━━━━━━━\n"
+                         f"Status: <b>{status_icon}</b>")
             try:
-                await context.bot.edit_message_text(live_msg, chat_id=user_id, message_id=message_id, parse_mode='HTML')
-            except: pass
+                await context.bot.edit_message_text(live_text, chat_id=user_id, message_id=message_id, parse_mode='HTML')
+            except: pass # لتجنب أخطاء تكرار نفس النص
 
     # النتيجة النهائية
     exit_price = get_crypto_price(symbol)
     if exit_price:
-        if exit_price == entry_price: # منطق التعادل
-            status = "🟡 DRAW! Price Unchanged"
-            amount = 0
+        if exit_price == entry_price:
+            result_status = "🟡 <b>DRAW!</b> Price unchanged."
+            result_msg = "Your points have been returned. 🤝"
         else:
             win = (direction == "up" and exit_price > entry_price) or (direction == "down" and exit_price < entry_price)
-            amount = 200 if win else -200
+            amount = 200 if win else -200 
             update_balance(user_id, amount)
-            status = "🟢 WINNER! +200 Pts" if win else "🔴 LOSS! -200 Pts"
+            result_status = "🟢 <b>WINNER!</b> +200 Pts" if win else "🔴 <b>LOSS!</b> -200 Pts"
+            result_msg = "Market prediction completed. 🚀"
 
-        final_msg = (f"🏆 <b>{symbol} Final Result</b>\n"
-                     f"━━━━━━━━━━━━━━\n"
-                     f"📉 Entry: <code>${entry_price:.4f}</code>\n"
-                     f"📈 Exit: <code>${exit_price:.4f}</code>\n"
-                     f"━━━━━━━━━━━━━━\n"
-                     f"<b>{status}</b>")
-        await context.bot.send_message(user_id, final_msg, parse_mode='HTML')
+        final_card = (f"🏆 <b>{symbol} Final Result</b>\n"
+                      f"━━━━━━━━━━━━━━\n"
+                      f"📉 Entry: <code>${entry_price:.4f}</code>\n"
+                      f"📈 Exit: <code>${exit_price:.4f}</code>\n"
+                      f"━━━━━━━━━━━━━━\n"
+                      f"{result_status}\n"
+                      f"{result_msg}")
+        await context.bot.send_message(user_id, final_card, parse_mode='HTML')
     else:
-        await context.bot.send_message(user_id, "⚠️ Network Error. Points returned.")
+        await context.bot.send_message(user_id, "⚠️ Network Error at exit. Points returned.")
 
-# --- الأوامر والرسائل ---
+# --- الأوامر الأساسية (start, message, callback) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or f"Pilot_{user_id}"
-    if not get_user(user_id):
-        save_user(user_id, username, 1000, "Not Set")
-    
+    if not get_user(user_id): save_user(user_id, username, 1000, "Not Set")
+
     keyboard = [['🎮 Bet Now'], ['💼 Wallet', '👤 Account'], ['🏧 Withdraw', '📢 Earn Points']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text(f"🌕 <b>Welcome to Binance Moonbix!</b>\n\nPredict market moves and win! 🚀", reply_markup=reply_markup, parse_mode='HTML')
+    await update.message.reply_text(f"🌕 <b>Welcome to Binance Moonbix!</b>\n\nPredict the market moves and earn points. 🚀", reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -134,38 +148,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user: return
 
     if text == '👤 Account':
-        await update.message.reply_text(f"🚀 <b>Pilot: @{user[1]}</b>\n💰 Balance: <b>{user[2]:,} Pts</b>\n🏦 Wallet: <code>{user[3]}</code>", parse_mode='HTML')
+        await update.message.reply_text(f"🚀 <b>Pilot: @{user[1]}</b>\n💰 Balance: <b>{user[2]:,} Pts</b>", parse_mode='HTML')
     elif text == '🎮 Bet Now':
         if user[2] < 200:
-            await update.message.reply_text("❌ Insufficient Balance (Min 200 Pts).")
+            await update.message.reply_text("❌ Insufficient points! Invite friends.")
             return
         coins = ['BTC', 'ETH', 'BNB', 'SOL', 'TON', 'DOGE']
         keyboard = [[InlineKeyboardButton(f"🪙 {c}", callback_data=f"bet_{c}")] for c in coins]
         await update.message.reply_text("✨ <b>Choose Asset:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-    elif text == '💼 Wallet':
-        await update.message.reply_text("🔗 Send your <b>TRC20</b> address:", parse_mode='HTML')
-        context.user_data['waiting_for_wallet'] = True
-    elif context.user_data.get('waiting_for_wallet'):
-        save_user(user_id, user[1], user[2], text)
-        context.user_data['waiting_for_wallet'] = False
-        await update.message.reply_text("✅ Wallet Connected!")
 
 async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     await query.answer()
-    
+
     if query.data.startswith("bet_"):
         symbol = query.data.split("_")[1]
         price = get_crypto_price(symbol)
         if not price: return
         context.user_data.update({'coin': symbol, 'price': price})
-        keyboard = [[InlineKeyboardButton("📈 UP", callback_data="dir_up"), InlineKeyboardButton("📉 DOWN", callback_data="dir_down")]]
+        keyboard = [[InlineKeyboardButton("📈 BULLISH (UP)", callback_data="dir_up"), InlineKeyboardButton("📉 BEARISH (DOWN)", callback_data="dir_down")]]
         await query.edit_message_text(f"🪙 <b>{symbol} Market</b>\nPrice: <code>${price:.4f}</code>\n\nPredict 30s move:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     
     elif query.data.startswith("dir_"):
         direction = query.data.split("_")[1]
-        msg = await query.edit_message_text(f"🚀 <b>Trade Executed!</b>\nWaiting... ⏳", parse_mode='HTML')
+        msg = await query.edit_message_text(f"🚀 <b>Trade Executed!</b>\nStarting prediction... ⏳", parse_mode='HTML')
         asyncio.create_task(process_bet(context, user_id, msg.message_id, context.user_data['coin'], context.user_data['price'], direction))
 
 if __name__ == '__main__':
