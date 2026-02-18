@@ -94,7 +94,6 @@ async def process_bet(context, user_id, symbol, entry_price, direction):
     await asyncio.sleep(30)
     exit_price = get_crypto_price(symbol)
     if exit_price:
-        # منطق التعادل: إذا لم يتغير السعر
         if exit_price == entry_price:
             status = "🟡 DRAW! Price Unchanged"
             result_msg = "No points lost. Your balance remains the same. 🤝"
@@ -164,6 +163,23 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
            f"💰 Total Points: <b>{total_balance:,} Pts</b>\n"
            f"💵 Total Value: <b>${total_balance/1000:,.2f} USDT</b>")
     await update.message.reply_text(msg, parse_mode='HTML')
+
+# --- أمر الأدمن لمسح جميع المستخدمين ---
+async def clear_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("DELETE FROM users")
+        conn.commit()
+        c.close()
+        conn.close()
+        await update.message.reply_text("✅ <b>Database Cleared:</b> All users have been removed from the records.", parse_mode='HTML')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error clearing database: {str(e)}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -253,8 +269,8 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.answer()
     
-    if user[2] < 200:
-        await query.edit_message_text("❌ رصيدك نفذ! يرجى دعوة أصدقاء لكسب النقاط.")
+    if not user or user[2] < 200:
+        await query.edit_message_text("❌ رصيدك نفذ أو المستخدم غير موجود!")
         return
 
     if query.data.startswith("bet_"):
@@ -279,6 +295,7 @@ if __name__ == '__main__':
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", admin_stats))
+    application.add_handler(CommandHandler("clear_all", clear_all_users))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
     application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"{WEBHOOK_URL}/{TOKEN}")
