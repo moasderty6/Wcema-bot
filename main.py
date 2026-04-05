@@ -81,24 +81,27 @@ def update_balance(user_id, amount):
 
 # --- جلب السعر اللحظي ---
 # --- جلب السعر اللحظي من Gate.io ---
+# --- جلب السعر اللحظي من فيوتشر Gate.io ---
 def get_crypto_price(symbol):
     try:
-        # منصة Gate.io تستخدم صيغة الأزواج مع التوكن، مثل BTC_USDT بدلاً من BTC فقط
-        pair = f"{symbol.strip().upper()}_USDT"
-        url = "https://api.gateio.ws/api/v4/spot/tickers"
-        parameters = {'currency_pair': pair}
+        # عقود الفيوتشر في Gate.io تستخدم هذه الصيغة
+        contract = f"{symbol.strip().upper()}_USDT"
+        # تم تغيير الرابط ليؤشر على قسم الفيوتشر (العقود المقومة بـ USDT)
+        url = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
+        # المتغير هنا اسمه contract بدلاً من currency_pair
+        parameters = {'contract': contract}
         
         response = requests.get(url, params=parameters, timeout=10)
         data = response.json()
         
-        # واجهة Gate.io ترجع قائمة (List) في حال نجاح الطلب
         if data and isinstance(data, list) and len(data) > 0:
-            # السعر اللحظي يكون مسجل تحت مفتاح 'last'
+            # السعر اللحظي الأخير للعقد
             return float(data[0]['last'])
         return None
     except Exception as e:
-        logging.error(f"Error fetching price from Gate.io for {symbol}: {e}")
+        logging.error(f"Error fetching futures price from Gate.io for {symbol}: {e}")
         return None
+
 
 # --- معالجة الرهان (30 ثانية) مع منطق التعادل ---
 async def process_bet(context, user_id, symbol, entry_price, direction):
