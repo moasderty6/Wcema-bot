@@ -16,6 +16,8 @@ from telegram.ext import (
 # --- الإعدادات ---
 TOKEN = "7793678424:AAH7mXshTdQ4RjynCh-VyzGZAzWtDSSkiFM"
 CMC_API_KEY = "fbfc6aef-dab9-4644-8207-046b3cdf69a3"
+GATE_API_KEY = "a3f6a57b42f6106011e6890049e57b2e"
+GATE_API_SECRET = "1ac18e0a690ce782f6854137908a6b16eb910cf02f5b95fa3c43b670758f79bc"
 WEBHOOK_URL = "https://wcema-bot-6hga.onrender.com" 
 PORT = int(os.environ.get('PORT', 5000))
 ADMIN_ID = 6172153716 
@@ -78,15 +80,24 @@ def update_balance(user_id, amount):
     conn.close()
 
 # --- جلب السعر اللحظي ---
+# --- جلب السعر اللحظي من Gate.io ---
 def get_crypto_price(symbol):
     try:
-        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        parameters = {'symbol': symbol.strip().upper(), 'convert': 'USD'}
-        headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': CMC_API_KEY}
-        response = requests.get(url, headers=headers, params=parameters, timeout=10)
+        # منصة Gate.io تستخدم صيغة الأزواج مع التوكن، مثل BTC_USDT بدلاً من BTC فقط
+        pair = f"{symbol.strip().upper()}_USDT"
+        url = "https://api.gateio.ws/api/v4/spot/tickers"
+        parameters = {'currency_pair': pair}
+        
+        response = requests.get(url, params=parameters, timeout=10)
         data = response.json()
-        return data['data'][symbol.upper()]['quote']['USD']['price']
-    except:
+        
+        # واجهة Gate.io ترجع قائمة (List) في حال نجاح الطلب
+        if data and isinstance(data, list) and len(data) > 0:
+            # السعر اللحظي يكون مسجل تحت مفتاح 'last'
+            return float(data[0]['last'])
+        return None
+    except Exception as e:
+        logging.error(f"Error fetching price from Gate.io for {symbol}: {e}")
         return None
 
 # --- معالجة الرهان (30 ثانية) مع منطق التعادل ---
