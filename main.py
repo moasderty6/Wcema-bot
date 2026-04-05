@@ -3,7 +3,7 @@ import requests
 import logging
 import psycopg2 
 import asyncio
-from flask import request
+from flask import Flask, request
 import syncio
 import threading
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
