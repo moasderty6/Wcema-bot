@@ -3,7 +3,8 @@ import requests
 import logging
 import psycopg2 
 import asyncio
-from flask import Flask
+from flask import request
+import syncio
 import threading
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -307,15 +308,12 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(process_bet(context, query.from_user.id, context.user_data['coin'], context.user_data['price'], direction))
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Bot is alive!", 200
-
-
 @app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook():
+def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
-    await application.process_update(update)
+    
+    asyncio.run(application.process_update(update))
+    
     return "ok", 200
 
 if __name__ == '__main__':
