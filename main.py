@@ -310,9 +310,12 @@ app = Flask(__name__)
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
-    
-    application.create_task(application.process_update(update))
-    
+
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(application.process_update(update))
+
     return "ok", 200
 
 if __name__ == '__main__':
@@ -328,7 +331,6 @@ if __name__ == '__main__':
 
     # تشغيل البوت (بدون blocking)
     asyncio.get_event_loop().run_until_complete(application.initialize())
-    asyncio.get_event_loop().run_until_complete(application.start())
 
     # تشغيل Flask (الأهم)
     app.run(host="0.0.0.0", port=PORT)
