@@ -307,16 +307,24 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(process_bet(context, query.from_user.id, context.user_data['coin'], context.user_data['price'], direction))
 app = Flask(__name__)
 
+# --- المسار الجديد المخصص لـ Cron-job ---
+@app.route("/", methods=["GET"])
+def index():
+    return "Bot is awake and running!", 200
+
+# --- مسار الـ Webhook الخاص بتيليجرام ---
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
 
     import asyncio
+    # ملاحظة: إنشاء loop جديد مع كل طلب قد يسبب ضغطاً، لكنه سيعمل مبدئياً
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(application.process_update(update))
 
     return "ok", 200
+
 
 if __name__ == '__main__':
     init_db()
