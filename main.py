@@ -4,7 +4,6 @@ import logging
 import psycopg2 
 import asyncio
 from flask import Flask, request
-import syncio
 import threading
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -312,7 +311,7 @@ app = Flask(__name__)
 def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
     
-    asyncio.run(application.process_update(update))
+    application.create_task(application.process_update(update))
     
     return "ok", 200
 
@@ -328,8 +327,8 @@ if __name__ == '__main__':
     application.add_handler(CallbackQueryHandler(bet_callback))
 
     # تشغيل البوت
-    application.initialize()
-    application.start()
+    asyncio.run(application.initialize())
+    asyncio.run(application.start())
 
     # تشغيل Flask (السيرفر الوحيد)
     app.run(host="0.0.0.0", port=PORT)
