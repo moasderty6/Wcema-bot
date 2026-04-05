@@ -326,9 +326,9 @@ if __name__ == '__main__':
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
 
-    # تشغيل البوت
-    asyncio.run(application.initialize())
-    asyncio.run(application.start())
+    # تشغيل البوت (بدون blocking)
+    asyncio.get_event_loop().run_until_complete(application.initialize())
+    asyncio.get_event_loop().run_until_complete(application.start())
 
-    # تشغيل Flask (السيرفر الوحيد)
+    # تشغيل Flask (الأهم)
     app.run(host="0.0.0.0", port=PORT)
