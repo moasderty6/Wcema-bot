@@ -3,6 +3,8 @@ import requests
 import logging
 import psycopg2 
 import asyncio
+from flask import Flask
+import threading
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
@@ -303,13 +305,32 @@ async def bet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         dir_text = "BULLISH (UP)" if direction == "up" else "BEARISH (DOWN)"
         await query.edit_message_text(f"🚀 <b>Trade Executed!</b>\nPosition: {dir_text}\nWaiting (30s)... ⏳", parse_mode='HTML')
         asyncio.create_task(process_bet(context, query.from_user.id, context.user_data['coin'], context.user_data['price'], direction))
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive!", 200
+def run_flask():
+    app.run(host="0.0.0.0", port=8000)
 
 if __name__ == '__main__':
     init_db()
+
     application = Application.builder().token(TOKEN).build()
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", admin_stats))
     application.add_handler(CommandHandler("clear_all", clear_all_users))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
-    application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"{WEBHOOK_URL}/{TOKEN}")
+
+    # شغل Flask
+    threading.Thread(target=run_flask).start()
+
+    # شغل البوت webhook
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
+    )
