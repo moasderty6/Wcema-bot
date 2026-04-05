@@ -310,8 +310,13 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     return "Bot is alive!", 200
-def run_flask():
-    app.run(host="0.0.0.0", port=8000)
+
+
+@app.route(f"/{TOKEN}", methods=["POST"])
+async def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    await application.process_update(update)
+    return "ok", 200
 
 if __name__ == '__main__':
     init_db()
@@ -324,13 +329,9 @@ if __name__ == '__main__':
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(bet_callback))
 
-    # شغل Flask
-    threading.Thread(target=run_flask).start()
+    # تشغيل البوت
+    application.initialize()
+    application.start()
 
-    # شغل البوت webhook
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
-    )
+    # تشغيل Flask (السيرفر الوحيد)
+    app.run(host="0.0.0.0", port=PORT)
