@@ -84,25 +84,28 @@ def update_balance(user_id, amount):
 # --- جلب السعر اللحظي ---
 # --- جلب السعر اللحظي من Gate.io ---
 # --- جلب السعر اللحظي من فيوتشر Gate.io ---
+# --- جلب السعر اللحظي من بايننس (عبر البروكسي) ---
 def get_crypto_price(symbol):
     try:
-        # عقود الفيوتشر في Gate.io تستخدم هذه الصيغة
-        contract = f"{symbol.strip().upper()}_USDT"
-        # تم تغيير الرابط ليؤشر على قسم الفيوتشر (العقود المقومة بـ USDT)
-        url = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
-        # المتغير هنا اسمه contract بدلاً من currency_pair
-        parameters = {'contract': contract}
+        # بايننس بتستخدم الرمز بدون شرطة سفلية (مثال: BTCUSDT بدلاً من BTC_USDT)
+        pair = f"{symbol.strip().upper()}USDT"
+        
+        # رابط البروكسي الخاص بك على Cloudflare
+        url = "https://restless-truth-902c.mo-dahoh.workers.dev/api/v3/ticker/price"
+        parameters = {'symbol': pair}
         
         response = requests.get(url, params=parameters, timeout=10)
         data = response.json()
         
-        if data and isinstance(data, list) and len(data) > 0:
-            # السعر اللحظي الأخير للعقد
-            return float(data[0]['last'])
+        # بايننس بترجع السعر بهذا الشكل: {'symbol': 'BTCUSDT', 'price': '65000.00'}
+        if data and 'price' in data:
+            return float(data['price'])
         return None
+        
     except Exception as e:
-        logging.error(f"Error fetching futures price from Gate.io for {symbol}: {e}")
+        logging.error(f"Error fetching price from Binance Proxy for {symbol}: {e}")
         return None
+
 
 
 # --- معالجة الرهان (30 ثانية) مع منطق التعادل ---
