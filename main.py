@@ -90,21 +90,28 @@ def get_crypto_price(symbol):
         # بايننس بتستخدم الرمز بدون شرطة سفلية (مثال: BTCUSDT بدلاً من BTC_USDT)
         pair = f"{symbol.strip().upper()}USDT"
         
-        # رابط البروكسي الخاص بك على Cloudflare
-        url = "https://restless-truth-902c.mo-dahoh.workers.dev/api/v3/ticker/price"
+        # الرابط المفتوح من بايننس (مخصص للبيانات وما عليه حظر السيرفرات الأمريكية)
+        url = "https://data-api.binance.vision/api/v3/ticker/price"
         parameters = {'symbol': pair}
         
         response = requests.get(url, params=parameters, timeout=10)
-        data = response.json()
         
-        # بايننس بترجع السعر بهذا الشكل: {'symbol': 'BTCUSDT', 'price': '65000.00'}
-        if data and 'price' in data:
-            return float(data['price'])
+        # التأكد من نجاح الطلب قبل قراءة البيانات
+        if response.status_code == 200:
+            data = response.json()
+            
+            # بايننس بترجع السعر بهذا الشكل: {'symbol': 'BTCUSDT', 'price': '65000.00'}
+            if data and 'price' in data:
+                return float(data['price'])
+        else:
+            logging.error(f"Binance API returned error {response.status_code}: {response.text}")
+            
         return None
         
     except Exception as e:
-        logging.error(f"Error fetching price from Binance Proxy for {symbol}: {e}")
+        logging.error(f"Error fetching price from Binance Vision for {symbol}: {e}")
         return None
+
 
 
 
